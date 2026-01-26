@@ -1,0 +1,64 @@
+{
+  "name": "claude-session-continuity-mcp",
+  "version": "1.0.0",
+  "description": "Session Continuity for Claude Code - Never re-explain your project again",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "claude-session-continuity-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "start:v2": "MCP_V2_ONLY=true node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "dashboard": "node dist/dashboard.js",
+    "dashboard:v2": "node dist/dashboard-v2.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "ai",
+    "context",
+    "memory",
+    "session",
+    "continuity",
+    "anthropic"
+  ],
+  "author": "Byeongchang Lee <leesgit@github.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leesgit/claude-session-continuity-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leesgit/claude-session-continuity-mcp/issues"
+  },
+  "homepage": "https://github.com/leesgit/claude-session-continuity-mcp#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@xenova/transformers": "^2.17.0",
+    "better-sqlite3": "^12.6.2",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.6.0"
+  }
+}
