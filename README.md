@@ -1,6 +1,6 @@
-# claude-session-continuity-mcp
+# claude-session-continuity-mcp (v4)
 
-> **Session Continuity for Claude Code** — Never re-explain your project again
+> **Session Continuity + Knowledge Graph for Claude Code** — Never re-explain your project again
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -20,7 +20,7 @@ Every new Claude Code session:
 
 **5 minutes of context-setting. Every. Single. Time.**
 
-## The Solution
+## The Solution (v4)
 
 ```bash
 # Session starts → Context auto-loads in <5ms
@@ -30,9 +30,15 @@ session_start({ project: "my-app" })
 #    Decisions: App Router, Server Actions, Zod validation
 #    State: Auth complete, working on signup
 #    Tasks: [P8] Implement signup form"
+
+# 과거 에러와 해결책을 시맨틱 검색
+memory_search({ query: "Provider rebuild 안됨", semantic: true })
+
+# 지식 그래프로 관련 메모리 탐색
+graph_explore({ memoryId: 23, depth: 2 })
 ```
 
-**Your project memory, instantly restored.**
+**Your project memory + knowledge graph, instantly restored.**
 
 ---
 
@@ -73,6 +79,8 @@ Add to `~/.claude.json` or `.mcp.json`:
 | 🔄 **Auto Context Capture** | `session_start` / `session_end` automatically save and restore |
 | ⚡ **<5ms Context Loading** | LRU caching for instant project recall |
 | 🧠 **Semantic Search** | Find memories by meaning, not just keywords |
+| 🕸️ **Knowledge Graph** | Connect memories with typed relations (solves, causes, extends...) |
+| 📊 **Memory Classification** | 5 types: observation, decision, learning, error, pattern |
 | ✅ **Integrated Verification** | Run build/test/lint with one command |
 | 📝 **Architecture Decisions** | Track why you made technical choices |
 | 📋 **Task Management** | Prioritized backlog that persists |
@@ -90,9 +98,9 @@ Add to `~/.claude.json` or `.mcp.json`:
 
 ---
 
-## Tools (v2 API) - 15 Focused Tools
+## Tools (v4 API) - 24 Focused Tools
 
-### Session Lifecycle ⭐
+### 1. Session Lifecycle (4) ⭐
 
 ```javascript
 // Start of session - auto-loads context
@@ -101,107 +109,151 @@ session_start({ project: "my-app", compact: true })
 // End of session - auto-saves context
 session_end({
   project: "my-app",
-  currentState: "Completed auth flow",
-  recentFiles: ["src/auth.ts", "src/login/page.tsx"]
+  summary: "Completed auth flow",
+  modifiedFiles: ["src/auth.ts", "src/login/page.tsx"]
 })
 
-// Get summary with token estimate
-session_summary({ project: "my-app" })
+// View session history
+session_history({ project: "my-app", limit: 5 })
+
+// Semantic search past sessions
+search_sessions({ query: "인증 작업", project: "my-app" })
 ```
 
-### Context Management
+### 2. Project Management (4)
 
 ```javascript
-// Get project context
-context_get({ project: "my-app" })
+// Get project status with task stats
+project_status({ project: "my-app" })
 
-// Update context
-context_update({
-  project: "my-app",
-  techStack: { framework: "Next.js 15", language: "TypeScript" },
-  architectureDecisions: ["App Router", "Server Actions"]
-})
+// Initialize new project
+project_init({ project: "my-app" })
+
+// Analyze project tech stack
+project_analyze({ project: "my-app" })
+
+// List all projects
+list_projects()
 ```
 
-### Memory Operations
+### 3. Task Management (4)
 
 ```javascript
-// Store a memory
-memory_store({
-  project: "my-app",
-  type: "decision",
-  content: "Using Zod for runtime validation",
-  importance: 8,
-  tags: ["validation", "architecture"]
-})
+// Add a task
+task_add({ project: "my-app", title: "Implement signup", priority: 8 })
 
-// Search memories (FTS or semantic)
-memory_search({
-  query: "validation approach",
-  semantic: true  // Uses embeddings
-})
+// Update task status
+task_update({ taskId: 1, status: "done" })
+
+// List tasks
+task_list({ project: "my-app", status: "pending" })
+
+// Suggest tasks from TODO comments
+task_suggest({ project: "my-app" })
 ```
 
-### Verification
+### 4. Solution Archive (3)
 
 ```javascript
-// Run build + test + lint
-verify({ project: "my-app" })
-
-// Run specific gates
-verify({ project: "my-app", gates: ["build", "test"] })
-```
-
-### Auto-Learning
-
-```javascript
-// Learn from an error fix
-learn({
-  project: "my-app",
-  type: "fix",
-  content: "TypeError: Cannot read property 'id'",
+// Record an error solution
+solution_record({
+  errorSignature: "TypeError: Cannot read property 'id'",
   solution: "Use optional chaining: user?.id"
 })
 
 // Find similar solutions
-recall_solution({ query: "TypeError property undefined" })
+solution_find({ query: "TypeError property" })
+
+// AI-powered solution suggestion
+solution_suggest({ errorMessage: "Cannot read property 'email'" })
 ```
 
----
+### 5. Verification (3)
 
-## v2 Mode (Recommended)
+```javascript
+// Run build
+verify_build({ project: "my-app" })
 
-Use only the 15 focused v2 tools:
+// Run tests
+verify_test({ project: "my-app" })
 
-```json
-{
-  "env": {
-    "WORKSPACE_ROOT": "/path/to/workspace",
-    "MCP_V2_ONLY": "true"
-  }
-}
+// Run all (build + test + lint)
+verify_all({ project: "my-app" })
 ```
 
-<details>
-<summary>Legacy v1 tools (46 tools) - Click to expand</summary>
+### 6. Memory System (4) 🆕
 
-Still available for backwards compatibility:
+```javascript
+// Store a classified memory
+memory_store({
+  content: "Riverpod으로 상태관리하면 테스트가 쉬워짐",
+  type: "learning",  // observation, decision, learning, error, pattern
+  project: "my-app",
+  tags: ["flutter", "state-management"],
+  importance: 8,
+  relatedTo: 23  // Connect to existing memory
+})
 
-`list_projects`, `detect_platform`, `get_tech_stack`, `get_project_stats`,
-`get_session`, `update_session`, `save_session_history`, `get_session_history`,
-`run_verification`, `search_similar_work`, `record_work_pattern`, `get_work_patterns`,
-`store_memory`, `recall_memory`, `recall_by_timeframe`, `search_by_tag`,
-`delete_memory`, `get_memory_stats`, `semantic_search`, `get_embedding_status`,
-`rebuild_embeddings`, `create_relation`, `find_connected_memories`,
-`collect_work_feedback`, `get_pending_feedbacks`, `resolve_feedback`,
-`record_filter_pattern`, `get_filter_patterns`, `get_safe_output_guidelines`,
-`auto_learn_decision`, `auto_learn_fix`, `auto_learn_pattern`, `auto_learn_dependency`,
-`get_project_knowledge`, `get_similar_issues`, `get_project_context`,
-`init_project_context`, `update_active_context`, `update_architecture_decision`,
-`add_task`, `complete_task`, `update_task_status`, `get_pending_tasks`,
-`record_solution`, `find_solution`, `get_continuity_stats`
+// Search memories (keyword or semantic)
+memory_search({
+  query: "상태관리 테스트",
+  type: "learning",
+  semantic: true,  // Use embedding similarity
+  limit: 10
+})
 
-</details>
+// Find related memories (graph + semantic)
+memory_related({
+  memoryId: 23,
+  includeGraph: true,
+  includeSemantic: true
+})
+
+// Get memory statistics
+memory_stats({ project: "my-app" })
+```
+
+### 7. Knowledge Graph (2) 🆕
+
+```javascript
+// Connect two memories with a typed relation
+graph_connect({
+  sourceId: 23,
+  targetId: 25,
+  relation: "solves",  // related_to, causes, solves, depends_on, contradicts, extends, example_of
+  strength: 0.9
+})
+
+// Explore knowledge graph
+graph_explore({
+  memoryId: 23,
+  depth: 2,
+  relation: "all",  // or specific relation type
+  direction: "both"  // outgoing, incoming, both
+})
+```
+
+## Memory Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `observation` | 코드베이스에서 발견한 패턴, 구조 | "모든 화면은 features/ 폴더에 분리됨" |
+| `decision` | 아키텍처, 라이브러리 선택 | "캐싱을 위해 SharedPreferences 사용 결정" |
+| `learning` | 새로 알게 된 지식, 베스트 프랙티스 | "Riverpod이 테스트에 더 유리함" |
+| `error` | 발생한 에러와 해결 방법 | "Provider.read()로 rebuild 안됨 → watch()로 해결" |
+| `pattern` | 반복되는 코드 패턴, 컨벤션 | "late 키워드 남용 금지" |
+
+## Relation Types
+
+| Relation | Description | Example |
+|----------|-------------|---------|
+| `related_to` | 일반적인 관계 | A와 B가 관련됨 |
+| `causes` | A가 B를 발생시킴 | 캐싱 결정 → 폴더 구조 변경 |
+| `solves` | A가 B를 해결함 | Riverpod 학습 → Provider 버그 해결 |
+| `depends_on` | A가 B에 의존함 | 폴더 구조 → 캐싱 결정 |
+| `contradicts` | A와 B가 충돌함 | 두 설계 결정이 상충 |
+| `extends` | A가 B를 확장함 | late 패턴 → Riverpod 학습 확장 |
+| `example_of` | A가 B의 예시임 | 특정 코드가 패턴의 예시 |
 
 ---
 
@@ -211,13 +263,15 @@ SQLite database at `~/.claude/sessions.db`:
 
 | Table | Purpose |
 |-------|---------|
-| `memories` | Learnings, decisions, errors |
-| `memories_fts` | Full-text search index |
-| `embeddings` | Semantic search vectors |
-| `project_context` | Fixed project info |
+| `memories` | Classified memories (observation, decision, learning, error, pattern) |
+| `memories_fts` | Full-text search index (FTS5) |
+| `memory_relations` | Knowledge graph relations |
+| `embeddings_v4` | Semantic search vectors (MiniLM-L6-v2) |
+| `project_context` | Fixed project info (tech stack, decisions) |
 | `active_context` | Current work state |
 | `tasks` | Task backlog |
-| `resolved_issues` | Error solution archive |
+| `solutions` | Error solution archive |
+| `sessions` | Session history |
 
 ---
 
@@ -271,12 +325,15 @@ npm run dashboard:v2
 ## Roadmap
 
 - [x] v2 API (15 focused tools)
+- [x] v4 API (24 tools - memory + graph)
+- [x] Knowledge Graph with typed relations
+- [x] Memory classification (5 types)
+- [x] Semantic search (embeddings)
 - [x] Zod schema validation
 - [x] 111 tests
 - [x] GitHub Actions CI/CD
-- [x] Semantic search
-- [x] Auto-learning
 - [ ] Test coverage 80%+
+- [ ] Web dashboard
 - [ ] Docker image
 - [ ] Cloud sync option
 
