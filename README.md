@@ -1,6 +1,6 @@
-# claude-session-continuity-mcp (v4)
+# claude-session-continuity-mcp (v5)
 
-> **Session Continuity + Knowledge Graph for Claude Code** — Never re-explain your project again
+> **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -20,37 +20,45 @@ Every new Claude Code session:
 
 **5 minutes of context-setting. Every. Single. Time.**
 
-## The Solution (v4)
+## The Solution (v5)
+
+v5 is **fully automatic**. Claude Hooks handle everything without manual calls:
 
 ```bash
-# Session starts → Context auto-loads in <5ms
-session_start({ project: "my-app" })
-
-# → "my-app: Next.js 15 + TypeScript
-#    Decisions: App Router, Server Actions, Zod validation
-#    State: Auth complete, working on signup
-#    Tasks: [P8] Implement signup form"
-
-# 과거 에러와 해결책을 시맨틱 검색
-memory_search({ query: "Provider rebuild 안됨", semantic: true })
-
-# 지식 그래프로 관련 메모리 탐색
-graph_explore({ memoryId: 23, depth: 2 })
+# Session start → Auto-loads relevant context (Git-based semantic search)
+# When asking → Auto-injects memories/solutions related to your query
+# During conversation → Auto-captures important decisions/errors/learnings
+# On commit → Commit messages automatically become memories
 ```
 
-**Your project memory + knowledge graph, instantly restored.**
+```
+← Auto-output on session start:
+# 🚀 my-app - Session Resumed
+
+## Tech Stack
+**framework**: Next.js, **language**: TypeScript
+
+## Current State
+📍 Implementing signup form
+🚧 **Blocker**: OAuth callback URL issue
+
+## 🧠 Relevant Memories (semantic: 0.89)
+- 🎯 [decision] Decided on App Router, using Server Actions
+- ⚠️ [error] OAuth redirect_uri mismatch → check env file
+- 📚 [learning] Zod form validation gives automatic type inference
+```
+
+**Zero manual work. Context follows you.**
 
 ---
 
 ## Quick Start
 
-### Installation
+### 1. MCP Server Installation
 
 ```bash
 npm install claude-session-continuity-mcp
 ```
-
-### Claude Code Configuration
 
 Add to `~/.claude.json` or `.mcp.json`:
 
@@ -68,7 +76,25 @@ Add to `~/.claude.json` or `.mcp.json`:
 }
 ```
 
-### That's it. Start using it.
+### 2. Claude Hooks Installation (v5 Auto-Capture)
+
+```bash
+cd tools/project-manager-mcp/claude-hooks
+python install_hooks.py
+```
+
+This registers automatic context hooks in `~/.claude/settings.local.json`.
+
+**Installed Hooks:**
+
+| Hook | File | Function |
+|------|------|----------|
+| `SessionStart` | `session_start.py` | Auto-loads relevant context via semantic search on session start |
+| `PrePromptSubmit` | `pre_prompt_submit.py` | Auto-injects memories/solutions related to your query |
+| `PostPromptSubmit` | `post_prompt_submit.py` | Auto-captures important info (decision, error, learning, etc.) |
+| `SessionEnd` | `session_end.py` | Auto-saves sessions/memories based on Git commits |
+
+### 3. That's it. Fully automatic.
 
 ---
 
@@ -76,15 +102,16 @@ Add to `~/.claude.json` or `.mcp.json`:
 
 | Feature | Description |
 |---------|-------------|
-| 🔄 **Auto Context Capture** | `session_start` / `session_end` automatically save and restore |
-| ⚡ **<5ms Context Loading** | LRU caching for instant project recall |
-| 🧠 **Semantic Search** | Find memories by meaning, not just keywords |
-| 🕸️ **Knowledge Graph** | Connect memories with typed relations (solves, causes, extends...) |
-| 📊 **Memory Classification** | 5 types: observation, decision, learning, error, pattern |
-| ✅ **Integrated Verification** | Run build/test/lint with one command |
-| 📝 **Architecture Decisions** | Track why you made technical choices |
-| 📋 **Task Management** | Prioritized backlog that persists |
-| 🎓 **Auto-Learning** | Remembers error fixes and patterns |
+| 🤖 **Zero Manual Work** | Claude Hooks automate all context capture/load |
+| 🎯 **Query-Based Injection** | Selectively inject only relevant memories/solutions |
+| 🧠 **Semantic Search** | MiniLM-L6-v2 embedding-based meaning search |
+| 🌍 **Multilingual Patterns** | Auto-detect Korean/English/Japanese patterns |
+| 🔗 **Git Integration** | Commit messages auto-memorized |
+| 🕸️ **Knowledge Graph** | Memory relations (solves, causes, extends...) |
+| 📊 **Memory Classification** | 6 types: observation, decision, learning, error, pattern, code |
+| ✅ **Integrated Verification** | One-click build/test/lint execution |
+| 📋 **Task Management** | Priority-based task management |
+| 🔧 **Solution Archive** | Auto-search error solutions |
 
 ---
 
@@ -92,13 +119,108 @@ Add to `~/.claude.json` or `.mcp.json`:
 
 | Tool | What It Does | Why This Is Different |
 |------|--------------|----------------------|
-| **mcp-memory-service** | Generic AI memory (13+ tools) | **Claude Code optimized**, project-centric |
-| **Official Memory** | Simple key-value store | **Automatic capture**, semantic search |
-| **SESSION.md files** | Manual markdown files | **Zero manual work**, structured data |
+| **mcp-memory-service** | Generic AI memory | **Git integration**, task/solution unified, multilingual |
+| **Official Memory** | Simple key-value store | **Auto-capture**, semantic search, knowledge graph |
+| **SESSION.md files** | Manual markdown files | **Fully automatic**, Hook-based |
+
+### vs mcp-memory-service (Detailed Comparison)
+
+| Feature | This MCP | mcp-memory-service |
+|---------|----------|-------------------|
+| Auto-capture | ✅ Hook-based | ✅ Hook-based |
+| Semantic search | ✅ MiniLM-L6-v2 | ✅ MiniLM-L6-v2 |
+| **Git commit integration** | ✅ Commit → Memory | ❌ |
+| **Task management** | ✅ Built-in | ❌ |
+| **Solution archive** | ✅ Error solution DB | ❌ |
+| **Build/Test** | ✅ verify_all | ❌ |
+| **Multilingual patterns** | ✅ KO/EN/JA | ❌ English-centric |
+| Cloud sync | ❌ | ✅ Cloudflare D1 |
+| Web dashboard | ❌ | ✅ Port 8000 |
 
 ---
 
-## Tools (v4 API) - 24 Focused Tools
+## Claude Hooks (v5) - Auto-Capture System
+
+### Directory Structure
+
+```
+claude-hooks/
+├── session_start.py      # Session start - Semantic context load
+├── pre_prompt_submit.py  # Pre-prompt - Query-based memory injection
+├── post_prompt_submit.py # Post-prompt - Auto memory capture
+├── session_end.py        # Session end - Git-based save
+└── install_hooks.py      # Install script
+```
+
+### session_start.py - Semantic Context Load
+
+Auto-loads relevant memories via **4-phase multi-stage search** on session start:
+
+```
+Phase 0: Semantic search (embedding similarity based on Git keywords)
+Phase 1: Git commit keyword FTS search
+Phase 2: Recent 7-day memories
+Phase 3: Important tags (decision, error)
+Phase 4: Fallback (general context)
+```
+
+### pre_prompt_submit.py - Query-Based Injection
+
+Auto-injects **only memories/solutions related** to user's query:
+
+```python
+# Example: When asking "How to fix OAuth error"
+→ Search OAuth-related memories (FTS + keyword)
+→ Search error-type solutions
+→ Auto-add to context
+```
+
+### post_prompt_submit.py - Auto Memory Capture
+
+Auto-detects and saves **6 types** from conversation content:
+
+| Type | Detection Patterns (Multilingual) | Example |
+|------|-----------------------------------|---------|
+| `decision` | "decided", "chose", "결정", "選択" | Architecture decisions |
+| `error` | "fixed", "solved", "에러", "解決" | Bug fixes |
+| `learning` | "learned", "discovered", "배웠", "学んだ" | New knowledge |
+| `implementation` | "implemented", "completed", "구현", "実装" | Feature implementation |
+| `important` | "critical", "must", "중요", "重要" | Important notes |
+| `code` | Code blocks (100+ chars) | Code snippets |
+
+**User Overrides:**
+- `#remember` / `#기억` / `#覚える` - Force save
+- `#skip` / `#무시` / `#スキップ` - Don't save
+
+### session_end.py - Git-Based Save
+
+Saves sessions/memories **only when commits exist** (noise prevention):
+
+```
+1. New commit detected → Save session + memory
+2. Only uncommitted changes → Update active_context only
+3. Track commit hash → Prevent duplicate saves
+```
+
+### Install/Remove
+
+```bash
+# Install
+cd claude-hooks && python install_hooks.py
+
+# Remove
+python install_hooks.py --remove
+
+# Check status
+python install_hooks.py --status
+
+# Temporarily disable
+export MCP_HOOKS_DISABLED=true
+```
+
+---
+
+## Tools (v5 API) - 24 Focused Tools
 
 ### 1. Session Lifecycle (4) ⭐
 
@@ -117,7 +239,7 @@ session_end({
 session_history({ project: "my-app", limit: 5 })
 
 // Semantic search past sessions
-search_sessions({ query: "인증 작업", project: "my-app" })
+search_sessions({ query: "auth work", project: "my-app" })
 ```
 
 ### 2. Project Management (4)
@@ -181,12 +303,12 @@ verify_test({ project: "my-app" })
 verify_all({ project: "my-app" })
 ```
 
-### 6. Memory System (4) 🆕
+### 6. Memory System (4)
 
 ```javascript
 // Store a classified memory
 memory_store({
-  content: "Riverpod으로 상태관리하면 테스트가 쉬워짐",
+  content: "State management with Riverpod makes testing easier",
   type: "learning",  // observation, decision, learning, error, pattern
   project: "my-app",
   tags: ["flutter", "state-management"],
@@ -196,7 +318,7 @@ memory_store({
 
 // Search memories (keyword or semantic)
 memory_search({
-  query: "상태관리 테스트",
+  query: "state management test",
   type: "learning",
   semantic: true,  // Use embedding similarity
   limit: 10
@@ -213,7 +335,7 @@ memory_related({
 memory_stats({ project: "my-app" })
 ```
 
-### 7. Knowledge Graph (2) 🆕
+### 7. Knowledge Graph (2)
 
 ```javascript
 // Connect two memories with a typed relation
@@ -237,23 +359,23 @@ graph_explore({
 
 | Type | Description | Use Case |
 |------|-------------|----------|
-| `observation` | 코드베이스에서 발견한 패턴, 구조 | "모든 화면은 features/ 폴더에 분리됨" |
-| `decision` | 아키텍처, 라이브러리 선택 | "캐싱을 위해 SharedPreferences 사용 결정" |
-| `learning` | 새로 알게 된 지식, 베스트 프랙티스 | "Riverpod이 테스트에 더 유리함" |
-| `error` | 발생한 에러와 해결 방법 | "Provider.read()로 rebuild 안됨 → watch()로 해결" |
-| `pattern` | 반복되는 코드 패턴, 컨벤션 | "late 키워드 남용 금지" |
+| `observation` | Patterns, structures found in codebase | "All screens are separated in features/ folder" |
+| `decision` | Architecture, library choices | "Decided to use SharedPreferences for caching" |
+| `learning` | New knowledge, best practices | "Riverpod is better for testing" |
+| `error` | Occurred errors and solutions | "Provider.read() doesn't rebuild → use watch()" |
+| `pattern` | Recurring code patterns, conventions | "Avoid late keyword abuse" |
 
 ## Relation Types
 
 | Relation | Description | Example |
 |----------|-------------|---------|
-| `related_to` | 일반적인 관계 | A와 B가 관련됨 |
-| `causes` | A가 B를 발생시킴 | 캐싱 결정 → 폴더 구조 변경 |
-| `solves` | A가 B를 해결함 | Riverpod 학습 → Provider 버그 해결 |
-| `depends_on` | A가 B에 의존함 | 폴더 구조 → 캐싱 결정 |
-| `contradicts` | A와 B가 충돌함 | 두 설계 결정이 상충 |
-| `extends` | A가 B를 확장함 | late 패턴 → Riverpod 학습 확장 |
-| `example_of` | A가 B의 예시임 | 특정 코드가 패턴의 예시 |
+| `related_to` | General relation | A and B are related |
+| `causes` | A causes B | Caching decision → folder structure change |
+| `solves` | A solves B | Riverpod learning → Provider bug fix |
+| `depends_on` | A depends on B | Folder structure → Caching decision |
+| `contradicts` | A conflicts with B | Two design decisions conflict |
+| `extends` | A extends B | late pattern → Extended to Riverpod learning |
+| `example_of` | A is example of B | Specific code is example of pattern |
 
 ---
 
@@ -280,7 +402,7 @@ SQLite database at `~/.claude/sessions.db`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WORKSPACE_ROOT` | - | Workspace root path (required) |
-| `MCP_V2_ONLY` | `false` | Use only v2 tools |
+| `MCP_HOOKS_DISABLED` | `false` | Disable Claude Hooks |
 | `LOG_LEVEL` | `info` | Log level (debug/info/warn/error) |
 | `LOG_FILE` | - | Optional file logging path |
 
@@ -304,9 +426,6 @@ npm test
 
 # Test with coverage
 npm run test:coverage
-
-# Run v2 dashboard
-npm run dashboard:v2
 ```
 
 ---
@@ -326,10 +445,12 @@ npm run dashboard:v2
 
 - [x] v2 API (15 focused tools)
 - [x] v4 API (24 tools - memory + graph)
+- [x] v5 Claude Hooks (auto-capture)
 - [x] Knowledge Graph with typed relations
-- [x] Memory classification (5 types)
+- [x] Memory classification (6 types)
 - [x] Semantic search (embeddings)
-- [x] Zod schema validation
+- [x] Multilingual pattern detection (KO/EN/JA)
+- [x] Git commit integration
 - [x] 111 tests
 - [x] GitHub Actions CI/CD
 - [ ] Test coverage 80%+

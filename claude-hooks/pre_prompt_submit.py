@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Pre-prompt Submit Hook v4 for Project Manager MCP
+Pre-prompt Submit Hook v5 for Project Manager MCP
 
-핵심 변경 (v4):
-- MCP v5의 새로운 prompts 컨텍스트와 동일한 풍부한 정보 제공
-- 메모리, 에러 솔루션까지 포함
-- 토큰 효율성 유지하면서 최대한 유용한 정보 제공
+핵심 변경 (v5):
+- 쿼리 기반 관련 메모리 자동 주입 (Zero re-explanation)
+- 시맨틱 검색으로 사용자 질문과 관련된 메모리/솔루션 자동 매칭
+- FTS + 키워드 기반 폴백 (임베딩 없이도 작동)
+- 토큰 효율성 유지
 """
 from __future__ import annotations
 
@@ -13,14 +14,26 @@ import json
 import os
 import sys
 import sqlite3
+import re
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 
 # 설정
 WORKSPACE_ROOT = os.environ.get('WORKSPACE_ROOT', '/Users/ibyeongchang/Documents/dev/ai-service-generator')
 DB_PATH = os.path.join(WORKSPACE_ROOT, '.claude', 'sessions.db')
 APPS_DIR = os.path.join(WORKSPACE_ROOT, 'apps')
+
+# 쿼리 관련성 키워드 매핑 (도메인별)
+KEYWORD_PATTERNS = {
+    'error': ['에러', 'error', 'bug', '버그', 'fix', '수정', '안됨', '실패', 'fail', 'crash', '오류'],
+    'ui': ['ui', 'ux', '화면', 'screen', '디자인', 'design', '레이아웃', 'layout', '버튼', 'button', '스타일', 'style'],
+    'api': ['api', '서버', 'server', '요청', 'request', 'response', '통신', 'fetch', 'http'],
+    'state': ['상태', 'state', 'provider', 'riverpod', 'bloc', '데이터', 'data'],
+    'navigation': ['네비게이션', 'navigation', '라우팅', 'routing', '이동', 'navigate', 'route'],
+    'auth': ['인증', 'auth', '로그인', 'login', '회원', 'user', '토큰', 'token'],
+    'test': ['테스트', 'test', '검증', 'verify', 'spec'],
+}
 
 
 def get_current_project() -> Optional[str]:
@@ -45,8 +58,159 @@ def get_current_project() -> Optional[str]:
     return None
 
 
-def load_full_context(project: str) -> Optional[Dict[str, Any]]:
-    """DB에서 프로젝트 전체 컨텍스트 로드 (v4: 메모리, 솔루션 포함)"""
+def get_user_query() -> Optional[str]:
+    """stdin에서 사용자 쿼리 읽기 (Hook은 stdin으로 프롬프트를 받음)"""
+    try:
+        if not sys.stdin.isatty():
+            return sys.stdin.read().strip()
+    except:
+        pass
+    return None
+
+
+def extract_keywords(text: str) -> List[str]:
+    """텍스트에서 주요 키워드 추출"""
+    if not text:
+        return []
+
+    # 소문자 변환
+    text_lower = text.lower()
+
+    found_categories = []
+    for category, patterns in KEYWORD_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in text_lower:
+                found_categories.append(category)
+                break
+
+    # 일반 키워드 추출 (2글자 이상, 한글/영문)
+    words = re.findall(r'[가-힣]{2,}|[a-zA-Z]{3,}', text)
+    keywords = [w.lower() for w in words if len(w) >= 2]
+
+    return list(set(found_categories + keywords))
+
+
+def search_relevant_memories(conn: sqlite3.Connection, project: str, query: str, limit: int = 5) -> List[Dict]:
+    """쿼리와 관련된 메모리 검색 (FTS + 키워드 매칭)"""
+    if not query:
+        return []
+
+    cursor = conn.cursor()
+    keywords = extract_keywords(query)
+
+    if not keywords:
+        return []
+
+    results = []
+    seen_ids = set()
+
+    # 1. FTS5 전체 텍스트 검색
+    try:
+        fts_query = ' OR '.join(keywords[:5])  # 상위 5개 키워드만
+        cursor.execute('''
+            SELECT m.id, m.content, m.memory_type, m.importance, m.tags
+            FROM memories m
+            JOIN memories_fts fts ON m.id = fts.rowid
+            WHERE memories_fts MATCH ? AND (m.project = ? OR m.project = 'global')
+            ORDER BY m.importance DESC, m.created_at DESC
+            LIMIT ?
+        ''', (fts_query, project, limit))
+
+        for row in cursor.fetchall():
+            if row[0] not in seen_ids:
+                seen_ids.add(row[0])
+                results.append({
+                    'id': row[0],
+                    'content': row[1],
+                    'type': row[2],
+                    'importance': row[3],
+                    'tags': row[4],
+                    'match_type': 'fts'
+                })
+    except Exception as e:
+        pass  # FTS 실패 시 폴백
+
+    # 2. LIKE 폴백 검색 (FTS 결과 부족 시)
+    if len(results) < limit:
+        remaining = limit - len(results)
+        for keyword in keywords[:3]:
+            if len(results) >= limit:
+                break
+            try:
+                cursor.execute('''
+                    SELECT id, content, memory_type, importance, tags
+                    FROM memories
+                    WHERE (project = ? OR project = 'global')
+                      AND (content LIKE ? OR tags LIKE ?)
+                    ORDER BY importance DESC, created_at DESC
+                    LIMIT ?
+                ''', (project, f'%{keyword}%', f'%{keyword}%', remaining))
+
+                for row in cursor.fetchall():
+                    if row[0] not in seen_ids:
+                        seen_ids.add(row[0])
+                        results.append({
+                            'id': row[0],
+                            'content': row[1],
+                            'type': row[2],
+                            'importance': row[3],
+                            'tags': row[4],
+                            'match_type': 'keyword'
+                        })
+            except:
+                pass
+
+    return results[:limit]
+
+
+def search_relevant_solutions(conn: sqlite3.Connection, project: str, query: str, limit: int = 3) -> List[Dict]:
+    """쿼리와 관련된 에러 솔루션 검색"""
+    if not query:
+        return []
+
+    cursor = conn.cursor()
+    keywords = extract_keywords(query)
+
+    # 에러 관련 키워드가 있을 때만 솔루션 검색
+    error_keywords = ['에러', 'error', 'bug', '버그', 'fix', '수정', '실패', 'fail', 'crash', '오류', '안됨']
+    has_error_context = any(k in query.lower() for k in error_keywords)
+
+    if not has_error_context and 'error' not in [k for k in keywords]:
+        return []
+
+    results = []
+    seen_ids = set()
+
+    for keyword in keywords[:5]:
+        if len(results) >= limit:
+            break
+        try:
+            cursor.execute('''
+                SELECT id, error_signature, error_message, solution
+                FROM solutions
+                WHERE (project = ? OR project IS NULL)
+                  AND (error_signature LIKE ? OR error_message LIKE ? OR solution LIKE ? OR keywords LIKE ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', (project, f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', f'%{keyword}%', limit))
+
+            for row in cursor.fetchall():
+                if row[0] not in seen_ids:
+                    seen_ids.add(row[0])
+                    results.append({
+                        'id': row[0],
+                        'signature': row[1],
+                        'message': row[2][:100] if row[2] else None,
+                        'solution': row[3]
+                    })
+        except:
+            pass
+
+    return results[:limit]
+
+
+def load_full_context(project: str, user_query: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """DB에서 프로젝트 전체 컨텍스트 로드 (v5: 쿼리 기반 관련 메모리 자동 매칭)"""
     if not os.path.exists(DB_PATH):
         return None
 
@@ -82,32 +246,55 @@ def load_full_context(project: str) -> Optional[Dict[str, Any]]:
         ''', (project,))
         tasks = cursor.fetchall()
 
-        # 5. 최근 솔루션 (에러 해결 이력)
-        recent_solutions = []
-        try:
-            cursor.execute('''
-                SELECT error_signature, solution
-                FROM solutions
-                WHERE project = ?
-                ORDER BY created_at DESC LIMIT 3
-            ''', (project,))
-            recent_solutions = cursor.fetchall()
-        except:
-            pass
+        # ===== v5 신규: 쿼리 기반 관련 메모리/솔루션 검색 =====
+        relevant_memories = []
+        relevant_solutions = []
 
-        # 6. 중요 메모리 (v4 신규)
-        important_memories = []
-        try:
-            cursor.execute('''
-                SELECT id, content, memory_type, importance
-                FROM memories
-                WHERE project = ?
-                ORDER BY importance DESC, created_at DESC
-                LIMIT 5
-            ''', (project,))
-            important_memories = cursor.fetchall()
-        except:
-            pass
+        if user_query:
+            # 쿼리와 관련된 메모리 검색
+            relevant_memories = search_relevant_memories(conn, project, user_query, limit=5)
+            # 쿼리와 관련된 솔루션 검색
+            relevant_solutions = search_relevant_solutions(conn, project, user_query, limit=3)
+
+        # 쿼리 기반 결과가 없으면 중요도 기반 폴백
+        if not relevant_memories:
+            try:
+                cursor.execute('''
+                    SELECT id, content, memory_type, importance, tags
+                    FROM memories
+                    WHERE project = ? OR project = 'global'
+                    ORDER BY importance DESC, accessed_at DESC
+                    LIMIT 5
+                ''', (project,))
+                for row in cursor.fetchall():
+                    relevant_memories.append({
+                        'id': row[0],
+                        'content': row[1],
+                        'type': row[2],
+                        'importance': row[3],
+                        'tags': row[4],
+                        'match_type': 'importance'
+                    })
+            except:
+                pass
+
+        if not relevant_solutions:
+            try:
+                cursor.execute('''
+                    SELECT id, error_signature, error_message, solution
+                    FROM solutions
+                    WHERE project = ? OR project IS NULL
+                    ORDER BY created_at DESC LIMIT 3
+                ''', (project,))
+                for row in cursor.fetchall():
+                    relevant_solutions.append({
+                        'id': row[0],
+                        'signature': row[1],
+                        'message': row[2][:100] if row[2] else None,
+                        'solution': row[3]
+                    })
+            except:
+                pass
 
         conn.close()
 
@@ -117,6 +304,7 @@ def load_full_context(project: str) -> Optional[Dict[str, Any]]:
 
         return {
             'project': project,
+            'userQuery': user_query,  # v5: 쿼리 저장
             'fixed': {
                 'techStack': json.loads(fixed_row['tech_stack']) if fixed_row and fixed_row['tech_stack'] else {},
                 'architectureDecisions': json.loads(fixed_row['architecture_decisions']) if fixed_row and fixed_row['architecture_decisions'] else [],
@@ -138,14 +326,24 @@ def load_full_context(project: str) -> Optional[Dict[str, Any]]:
                 {'id': t['id'], 'title': t['title'], 'status': t['status'], 'priority': t['priority']}
                 for t in tasks
             ],
-            'recentSolutions': [
-                {'error': s['error_signature'], 'solution': s['solution'][:80] + '...' if len(s['solution']) > 80 else s['solution']}
-                for s in recent_solutions
-            ] if recent_solutions else [],
-            'importantMemories': [
-                {'type': m['memory_type'], 'content': m['content'][:100] + '...' if len(m['content']) > 100 else m['content'], 'importance': m['importance']}
-                for m in important_memories
-            ] if important_memories else []
+            # v5: 쿼리 기반 관련 메모리 (match_type 포함)
+            'relevantMemories': [
+                {
+                    'type': m['type'],
+                    'content': m['content'][:150] + '...' if len(m['content']) > 150 else m['content'],
+                    'importance': m['importance'],
+                    'matchType': m.get('match_type', 'unknown')
+                }
+                for m in relevant_memories
+            ],
+            # v5: 쿼리 기반 관련 솔루션
+            'relevantSolutions': [
+                {
+                    'error': s['signature'],
+                    'solution': s['solution'][:120] + '...' if len(s['solution']) > 120 else s['solution']
+                }
+                for s in relevant_solutions
+            ]
         }
     except Exception as e:
         print(f"<!-- Context load error: {e} -->", file=sys.stderr)
@@ -153,8 +351,35 @@ def load_full_context(project: str) -> Optional[Dict[str, Any]]:
 
 
 def format_rich_context(context: dict) -> str:
-    """풍부하지만 토큰 효율적인 컨텍스트 포맷 (v4)"""
+    """풍부하지만 토큰 효율적인 컨텍스트 포맷 (v5: 쿼리 관련성 강조)"""
     lines = [f"# 🚀 {context['project']} Context\n"]
+
+    # v5: 쿼리 기반 관련 메모리가 있으면 최상단에 표시
+    has_query_match = context.get('relevantMemories') and any(
+        m.get('matchType') in ('fts', 'keyword') for m in context['relevantMemories']
+    )
+
+    if has_query_match:
+        lines.append("## 🎯 Related to Your Query")
+        type_icons = {
+            'observation': '👀',
+            'decision': '🎯',
+            'learning': '📚',
+            'error': '⚠️',
+            'pattern': '🔄'
+        }
+        for mem in context['relevantMemories'][:3]:
+            if mem.get('matchType') in ('fts', 'keyword'):
+                icon = type_icons.get(mem['type'], '💭')
+                lines.append(f"- {icon} {mem['content']}")
+        lines.append('')
+
+    # v5: 쿼리 관련 솔루션
+    if context.get('relevantSolutions'):
+        lines.append("## 🔧 Relevant Solutions")
+        for sol in context['relevantSolutions'][:2]:
+            lines.append(f"- **{sol['error']}**: {sol['solution']}")
+        lines.append('')
 
     # 기술 스택
     if context.get('fixed') and context['fixed'].get('techStack'):
@@ -194,8 +419,8 @@ def format_rich_context(context: dict) -> str:
             lines.append(f"- {icon} [P{task['priority']}] {task['title']} (#{task['id']})")
         lines.append('')
 
-    # 중요 메모리 (v4 신규)
-    if context.get('importantMemories'):
+    # 중요도 기반 메모리 (쿼리 매칭이 없을 때만)
+    if not has_query_match and context.get('relevantMemories'):
         type_icons = {
             'observation': '👀',
             'decision': '🎯',
@@ -204,27 +429,20 @@ def format_rich_context(context: dict) -> str:
             'pattern': '🔄'
         }
         lines.append(f"## 🧠 Key Memories")
-        for mem in context['importantMemories'][:5]:
+        for mem in context['relevantMemories'][:5]:
             icon = type_icons.get(mem['type'], '💭')
             lines.append(f"- {icon} [{mem['type']}] {mem['content']}")
         lines.append('')
 
-    # 최근 에러 솔루션
-    if context.get('recentSolutions'):
-        lines.append(f"## 🔧 Recent Error Solutions")
-        for sol in context['recentSolutions'][:3]:
-            lines.append(f"- **{sol['error']}**: {sol['solution']}")
-        lines.append('')
-
     # 작업 지침
     lines.append("---")
-    lines.append("_Auto-injected by MCP v5. Use `session_end` when done._")
+    lines.append("_Auto-injected by MCP v5. Context matched to your query._")
 
     return '\n'.join(lines)
 
 
 def main():
-    """메인 실행 - 프로젝트 컨텍스트 자동 주입"""
+    """메인 실행 - 프로젝트 컨텍스트 자동 주입 (v5: 쿼리 기반)"""
 
     # 환경 변수로 비활성화 가능
     if os.environ.get('MCP_HOOKS_DISABLED') == 'true':
@@ -235,8 +453,11 @@ def main():
     if not project:
         return
 
-    # 컨텍스트 로드
-    context = load_full_context(project)
+    # v5: 사용자 쿼리 읽기 (stdin에서)
+    user_query = get_user_query()
+
+    # 컨텍스트 로드 (쿼리 기반 관련 메모리 검색 포함)
+    context = load_full_context(project, user_query)
     if not context:
         # 새 프로젝트 - 초기화 안내 (간결하게)
         print(f"\n<project-context project=\"{project}\" status=\"new\">\nNew project. Use `project_init` to enable context tracking.\n</project-context>\n")
@@ -246,7 +467,13 @@ def main():
     rich_context = format_rich_context(context)
 
     # stdout으로 출력 - Claude가 이를 컨텍스트로 받음
-    print(f"\n<project-context project=\"{project}\">\n{rich_context}\n</project-context>\n")
+    # v5: 쿼리 매칭 여부 표시
+    has_match = context.get('relevantMemories') and any(
+        m.get('matchType') in ('fts', 'keyword') for m in context['relevantMemories']
+    )
+    match_status = 'query-matched' if has_match else 'default'
+
+    print(f"\n<project-context project=\"{project}\" match=\"{match_status}\">\n{rich_context}\n</project-context>\n")
 
 
 if __name__ == '__main__':
