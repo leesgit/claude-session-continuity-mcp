@@ -115,30 +115,6 @@ This registers automatic context hooks in `~/.claude/settings.local.json`.
 
 ---
 
-## Why Not Use...?
-
-| Tool | What It Does | Why This Is Different |
-|------|--------------|----------------------|
-| **mcp-memory-service** | Generic AI memory | **Git integration**, task/solution unified, multilingual |
-| **Official Memory** | Simple key-value store | **Auto-capture**, semantic search, knowledge graph |
-| **SESSION.md files** | Manual markdown files | **Fully automatic**, Hook-based |
-
-### vs mcp-memory-service (Detailed Comparison)
-
-| Feature | This MCP | mcp-memory-service |
-|---------|----------|-------------------|
-| Auto-capture | ✅ Hook-based | ✅ Hook-based |
-| Semantic search | ✅ MiniLM-L6-v2 | ✅ MiniLM-L6-v2 |
-| **Git commit integration** | ✅ Commit → Memory | ❌ |
-| **Task management** | ✅ Built-in | ❌ |
-| **Solution archive** | ✅ Error solution DB | ❌ |
-| **Build/Test** | ✅ verify_all | ❌ |
-| **Multilingual patterns** | ✅ KO/EN/JA | ❌ English-centric |
-| Cloud sync | ❌ | ✅ Cloudflare D1 |
-| Web dashboard | ❌ | ✅ Port 8000 |
-
----
-
 ## Claude Hooks (v5) - Auto-Capture System
 
 ### Directory Structure
@@ -482,4 +458,3 @@ PRs welcome! Please:
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
 - [Xenova Transformers](https://github.com/xenova/transformers.js) for embeddings
-- Inspired by [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
