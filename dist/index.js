@@ -18,6 +18,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as fs from 'fs/promises';
+import { mkdirSync, existsSync } from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import Database from 'better-sqlite3';
@@ -26,15 +27,63 @@ import { pipeline, env } from '@xenova/transformers';
 // 모델 캐시 설정
 env.cacheDir = path.join(process.env.HOME || '/tmp', '.cache', 'transformers');
 env.allowLocalModels = true;
-// 기본 경로 설정
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/Users/ibyeongchang/Documents/dev/ai-service-generator';
+// 기본 경로 설정 (자동 감지)
+function detectWorkspaceRoot() {
+    // 1. 환경변수가 설정되어 있으면 사용
+    if (process.env.WORKSPACE_ROOT) {
+        return process.env.WORKSPACE_ROOT;
+    }
+    // 2. 현재 디렉토리에서 상위로 탐색하며 apps/ 또는 .claude/ 디렉토리 찾기
+    let current = process.cwd();
+    const root = path.parse(current).root;
+    while (current !== root) {
+        // apps/ 디렉토리가 있으면 여기가 workspace root
+        if (existsSync(path.join(current, 'apps'))) {
+            return current;
+        }
+        // .claude/ 디렉토리가 있으면 여기가 workspace root
+        if (existsSync(path.join(current, '.claude'))) {
+            return current;
+        }
+        // package.json + turbo.json이 있으면 모노레포 루트
+        if (existsSync(path.join(current, 'package.json')) && existsSync(path.join(current, 'turbo.json'))) {
+            return current;
+        }
+        current = path.dirname(current);
+    }
+    // 3. 못 찾으면 현재 디렉토리 사용 (경고 출력)
+    console.error('Warning: WORKSPACE_ROOT not set and could not auto-detect. Using current directory.');
+    console.error('Set WORKSPACE_ROOT environment variable in your MCP config for best results.');
+    return process.cwd();
+}
+const WORKSPACE_ROOT = detectWorkspaceRoot();
 const APPS_DIR = path.join(WORKSPACE_ROOT, 'apps');
-const DB_PATH = path.join(WORKSPACE_ROOT, '.claude', 'sessions.db');
+const CLAUDE_DIR = path.join(WORKSPACE_ROOT, '.claude');
+const DB_PATH = path.join(CLAUDE_DIR, 'sessions.db');
+// 모노레포 vs 단일 프로젝트 모드 감지
+const IS_MONOREPO = existsSync(APPS_DIR);
+const DEFAULT_PROJECT = IS_MONOREPO ? null : path.basename(WORKSPACE_ROOT);
+// ===== 디렉토리 생성 (동기) =====
+if (!existsSync(CLAUDE_DIR)) {
+    mkdirSync(CLAUDE_DIR, { recursive: true });
+}
 // ===== SQLite 데이터베이스 초기화 =====
 const db = new Database(DB_PATH);
-// v4 스키마 - 메모리 분류 체계 + 지식 그래프 강화
+// v5 스키마 - 세션 + 메모리 분류 체계 + 지식 그래프
 db.exec(`
-  -- 기존 sessions 테이블 사용 (스키마 변경 없음)
+  -- 세션 테이블 (핵심)
+  CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    last_work TEXT,
+    current_status TEXT,
+    next_tasks TEXT,
+    modified_files TEXT,
+    issues TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+  CREATE INDEX IF NOT EXISTS idx_sessions_timestamp ON sessions(timestamp DESC);
 
   -- 프로젝트 컨텍스트 (고정)
   CREATE TABLE IF NOT EXISTS project_context (
@@ -248,6 +297,22 @@ function runCommand(cmd, cwd) {
         const e = error;
         return { success: false, output: e.stdout || e.stderr || e.message || 'Unknown error' };
     }
+}
+// ===== 프로젝트 경로 헬퍼 (모노레포/단일 프로젝트 호환) =====
+function getProjectPath(project) {
+    // 단일 프로젝트 모드: 프로젝트명이 workspace 이름과 같으면 루트 반환
+    if (!IS_MONOREPO && project === DEFAULT_PROJECT) {
+        return WORKSPACE_ROOT;
+    }
+    // 모노레포 모드: apps/ 하위 경로
+    return getProjectPath(project);
+}
+function resolveProject(project) {
+    // 프로젝트명이 없으면 기본 프로젝트 사용 (단일 프로젝트 모드)
+    if (!project && DEFAULT_PROJECT) {
+        return DEFAULT_PROJECT;
+    }
+    return project || 'default';
 }
 // ===== MCP 서버 =====
 const server = new Server({ name: 'project-manager-v5', version: '5.0.0' }, {
@@ -619,7 +684,7 @@ async function handleTool(name, args) {
             case 'session_start': {
                 const project = args.project;
                 const compact = args.compact !== false;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 if (!await fileExists(projectPath)) {
                     return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
                 }
@@ -770,7 +835,7 @@ async function handleTool(name, args) {
             // ===== 프로젝트 관리 =====
             case 'project_status': {
                 const project = args.project;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 if (!await fileExists(projectPath)) {
                     return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
                 }
@@ -815,7 +880,7 @@ async function handleTool(name, args) {
                 const project = args.project;
                 const techStack = args.techStack;
                 const description = args.description;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 // 기술 스택 자동 감지
                 const detectedStack = await detectTechStack(projectPath);
                 const finalStack = { ...detectedStack, ...techStack };
@@ -836,7 +901,7 @@ async function handleTool(name, args) {
             }
             case 'project_analyze': {
                 const project = args.project;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 if (!await fileExists(projectPath)) {
                     return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
                 }
@@ -867,10 +932,18 @@ async function handleTool(name, args) {
             }
             case 'list_projects': {
                 try {
-                    const entries = await fs.readdir(APPS_DIR, { withFileTypes: true });
-                    const projects = entries
-                        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-                        .map(e => e.name);
+                    let projects = [];
+                    // 단일 프로젝트 모드
+                    if (!IS_MONOREPO && DEFAULT_PROJECT) {
+                        projects = [DEFAULT_PROJECT];
+                    }
+                    else if (IS_MONOREPO) {
+                        // 모노레포 모드: apps/ 하위 디렉토리
+                        const entries = await fs.readdir(APPS_DIR, { withFileTypes: true });
+                        projects = entries
+                            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+                            .map(e => e.name);
+                    }
                     // 각 프로젝트 상태 조회
                     const projectsWithStatus = await Promise.all(projects.map(async (p) => {
                         const active = db.prepare('SELECT current_state FROM active_context WHERE project = ?').get(p);
@@ -878,7 +951,8 @@ async function handleTool(name, args) {
                         return {
                             name: p,
                             status: active?.current_state || 'No context',
-                            pendingTasks: taskCount?.count || 0
+                            pendingTasks: taskCount?.count || 0,
+                            mode: IS_MONOREPO ? 'monorepo' : 'single'
                         };
                     }));
                     return { content: [{ type: 'text', text: JSON.stringify(projectsWithStatus, null, 2) }] };
@@ -936,7 +1010,7 @@ async function handleTool(name, args) {
             case 'task_suggest': {
                 const project = args.project;
                 const searchPath = args.path;
-                const projectPath = path.join(APPS_DIR, project, searchPath || '');
+                const projectPath = path.join(getProjectPath(project), searchPath || '');
                 // TODO, FIXME 등 검색
                 try {
                     const result = runCommand(`grep -rn "TODO\\|FIXME\\|HACK\\|XXX" --include="*.ts" --include="*.tsx" --include="*.dart" --include="*.kt" . | head -20`, projectPath);
@@ -1081,7 +1155,7 @@ async function handleTool(name, args) {
             // ===== 검증/품질 =====
             case 'verify_build': {
                 const project = args.project;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 const platform = await detectPlatform(projectPath);
                 let cmd;
                 switch (platform) {
@@ -1113,7 +1187,7 @@ async function handleTool(name, args) {
             case 'verify_test': {
                 const project = args.project;
                 const testPath = args.testPath;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 const platform = await detectPlatform(projectPath);
                 let cmd;
                 switch (platform) {
@@ -1137,7 +1211,7 @@ async function handleTool(name, args) {
             case 'verify_all': {
                 const project = args.project;
                 const stopOnFail = args.stopOnFail === true;
-                const projectPath = path.join(APPS_DIR, project);
+                const projectPath = getProjectPath(project);
                 const platform = await detectPlatform(projectPath);
                 const results = [];
                 // Build
@@ -1623,7 +1697,7 @@ const prompts = [
 ];
 // ===== Prompt 내용 생성 함수 =====
 async function generateProjectContext(project) {
-    const projectPath = path.join(APPS_DIR, project);
+    const projectPath = getProjectPath(project);
     // 프로젝트 존재 확인
     if (!await fileExists(projectPath)) {
         return `⚠️ 프로젝트를 찾을 수 없습니다: ${project}\n\napps/ 디렉토리에서 사용 가능한 프로젝트를 확인하세요.`;
