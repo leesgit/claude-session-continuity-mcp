@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Claude Code Hooks 자동 설치 스크립트
+ * Claude Code Hooks + MCP Server 자동 설치 스크립트
  *
- * npm install 시 자동으로 ~/.claude/settings.local.json에 Hook 등록
+ * npm install 시 자동으로:
+ * 1. ~/.claude/settings.local.json에 Hook 등록
+ * 2. ~/.claude.json에 MCP 서버 등록
  */
 
 import * as fs from 'fs';
@@ -15,6 +17,7 @@ const __dirname = path.dirname(__filename);
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.local.json');
+const MCP_CONFIG_FILE = path.join(os.homedir(), '.claude.json');
 
 // 설치된 패키지 경로 찾기
 function getPackagePath(): string {
@@ -56,8 +59,66 @@ function saveSettings(settings: Record<string, unknown>): void {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
+function loadMcpConfig(): Record<string, unknown> {
+  if (!fs.existsSync(MCP_CONFIG_FILE)) {
+    return {};
+  }
+  try {
+    return JSON.parse(fs.readFileSync(MCP_CONFIG_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveMcpConfig(config: Record<string, unknown>): void {
+  fs.writeFileSync(MCP_CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+function installMcpServer(): boolean {
+  console.log('🔧 Registering MCP server...');
+
+  try {
+    const config = loadMcpConfig();
+    const mcpServers = (config.mcpServers as Record<string, unknown>) || {};
+
+    // 이미 등록되어 있으면 스킵
+    if (mcpServers['project-manager']) {
+      console.log('   MCP server already registered');
+      return true;
+    }
+
+    // MCP 서버 등록
+    mcpServers['project-manager'] = {
+      command: 'npx',
+      args: ['claude-session-continuity-mcp']
+    };
+
+    config.mcpServers = mcpServers;
+    saveMcpConfig(config);
+
+    console.log('✅ MCP server registered in ~/.claude.json');
+    return true;
+  } catch (error) {
+    console.error('⚠️ Failed to register MCP server:', error);
+    console.log('   You can manually add to ~/.claude.json:');
+    console.log('   {');
+    console.log('     "mcpServers": {');
+    console.log('       "project-manager": {');
+    console.log('         "command": "npx",');
+    console.log('         "args": ["claude-session-continuity-mcp"]');
+    console.log('       }');
+    console.log('     }');
+    console.log('   }');
+    return false;
+  }
+}
+
 function install(): void {
-  console.log('🔧 Installing Claude Code Hooks for session-continuity...');
+  console.log('');
+  console.log('╔════════════════════════════════════════════════════════════╗');
+  console.log('║   Claude Session Continuity MCP - Installation             ║');
+  console.log('╚════════════════════════════════════════════════════════════╝');
+  console.log('');
 
   const packagePath = getPackagePath();
   const hooksDir = path.join(packagePath, 'hooks');
@@ -65,6 +126,9 @@ function install(): void {
   // Hook 스크립트 경로
   const sessionStartHook = path.join(hooksDir, 'session-start.js');
   const userPromptHook = path.join(hooksDir, 'user-prompt-submit.js');
+
+  // ===== 1. Hooks 설치 =====
+  console.log('📌 Step 1: Installing Hooks...');
 
   const settings = loadSettings();
 
@@ -98,11 +162,32 @@ function install(): void {
   settings.hooks = hooks;
   saveSettings(settings);
 
-  console.log('✅ Hooks installed successfully!');
+  console.log('✅ Hooks installed');
   console.log(`   SessionStart: ${sessionStartHook}`);
   console.log(`   UserPromptSubmit: ${userPromptHook}`);
   console.log('');
-  console.log('🚀 Restart Claude Code to activate hooks.');
+
+  // ===== 2. MCP 서버 등록 =====
+  console.log('📌 Step 2: Registering MCP Server...');
+  installMcpServer();
+  console.log('');
+
+  // ===== 완료 메시지 =====
+  console.log('╔════════════════════════════════════════════════════════════╗');
+  console.log('║   ✅ Installation Complete!                                ║');
+  console.log('╠════════════════════════════════════════════════════════════╣');
+  console.log('║                                                            ║');
+  console.log('║   🚀 Restart Claude Code to activate:                      ║');
+  console.log('║      - 24 MCP tools (session_start, memory_store, etc.)    ║');
+  console.log('║      - Auto context injection on session start             ║');
+  console.log('║                                                            ║');
+  console.log('║   📖 Quick Start:                                          ║');
+  console.log('║      1. Start a new Claude Code session                    ║');
+  console.log('║      2. Context will be auto-injected                      ║');
+  console.log('║      3. Use session_end to save context                    ║');
+  console.log('║                                                            ║');
+  console.log('╚════════════════════════════════════════════════════════════╝');
+  console.log('');
 }
 
 function uninstall(): void {

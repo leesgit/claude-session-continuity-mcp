@@ -305,7 +305,7 @@ function getProjectPath(project) {
         return WORKSPACE_ROOT;
     }
     // 모노레포 모드: apps/ 하위 경로
-    return getProjectPath(project);
+    return path.join(APPS_DIR, project);
 }
 function resolveProject(project) {
     // 프로젝트명이 없으면 기본 프로젝트 사용 (단일 프로젝트 모드)
@@ -684,9 +684,17 @@ async function handleTool(name, args) {
             case 'session_start': {
                 const project = args.project;
                 const compact = args.compact !== false;
-                const projectPath = getProjectPath(project);
-                if (!await fileExists(projectPath)) {
-                    return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
+                // 모노레포 모드에서만 프로젝트 디렉토리 체크
+                // 단일 프로젝트 모드나 DB에 이미 데이터가 있으면 스킵
+                if (IS_MONOREPO) {
+                    const projectPath = getProjectPath(project);
+                    if (!await fileExists(projectPath)) {
+                        // DB에 컨텍스트가 있는지 확인 (디렉토리 없어도 컨텍스트는 있을 수 있음)
+                        const hasContext = db.prepare('SELECT 1 FROM project_context WHERE project = ?').get(project);
+                        if (!hasContext) {
+                            return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
+                        }
+                    }
                 }
                 // 고정 컨텍스트
                 const fixedRow = db.prepare('SELECT * FROM project_context WHERE project = ?').get(project);
@@ -1005,7 +1013,7 @@ async function handleTool(name, args) {
                 const tasks = status === 'all'
                     ? db.prepare(sql).all(project)
                     : db.prepare(sql).all(project, status);
-                return { content: [{ type: 'text', text: JSON.stringify(tasks, null, 2) }] };
+                return { content: [{ type: 'text', text: JSON.stringify({ project, status, count: tasks.length, tasks }, null, 2) }] };
             }
             case 'task_suggest': {
                 const project = args.project;
@@ -1058,12 +1066,13 @@ async function handleTool(name, args) {
           INSERT INTO solutions (project, error_signature, error_message, solution, related_files, keywords)
           VALUES (?, ?, ?, ?, ?, ?)
         `).run(project || null, errorSignature, errorMessage || null, solution, relatedFiles ? JSON.stringify(relatedFiles) : null, keywords);
-                // 임베딩 저장 (시맨틱 검색용)
-                const embedding = await generateEmbedding(`${errorSignature} ${errorMessage || ''} ${solution}`);
-                if (embedding) {
-                    const buffer = Buffer.from(new Float32Array(embedding).buffer);
-                    db.prepare('INSERT OR REPLACE INTO embeddings_v3 (type, ref_id, embedding) VALUES (?, ?, ?)').run('solution', result.lastInsertRowid, buffer);
-                }
+                // 임베딩 저장 (시맨틱 검색용) - embeddings_v4 사용
+                generateEmbedding(`${errorSignature} ${errorMessage || ''} ${solution}`).then(embedding => {
+                    if (embedding) {
+                        const buffer = Buffer.from(new Float32Array(embedding).buffer);
+                        db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)').run('solution', result.lastInsertRowid, buffer);
+                    }
+                }).catch(() => { });
                 return {
                     content: [{
                             type: 'text',
@@ -1075,55 +1084,30 @@ async function handleTool(name, args) {
                 const query = args.query;
                 const project = args.project;
                 const limit = args.limit || 3;
-                // 키워드 검색 먼저
+                // 키워드 검색 (LIKE 기반, 안정적)
                 const keywordResults = db.prepare(`
           SELECT * FROM solutions
-          WHERE error_signature LIKE ? OR error_message LIKE ? OR keywords LIKE ?
+          WHERE error_signature LIKE ? OR error_message LIKE ? OR solution LIKE ? OR keywords LIKE ?
           ${project ? 'AND project = ?' : ''}
           ORDER BY created_at DESC LIMIT ?
-        `).all(`%${query}%`, `%${query}%`, `%${query}%`, ...(project ? [project, limit] : [limit]));
-                if (keywordResults.length > 0) {
-                    return {
-                        content: [{
-                                type: 'text',
-                                text: JSON.stringify(keywordResults.map(r => ({
-                                    id: r.id,
-                                    errorSignature: r.error_signature,
-                                    solution: r.solution,
-                                    project: r.project,
-                                    created: r.created_at
-                                })), null, 2)
-                            }]
-                    };
-                }
-                // 시맨틱 검색 폴백
-                const queryEmb = await generateEmbedding(query);
-                if (!queryEmb) {
-                    return { content: [{ type: 'text', text: 'No solutions found' }] };
-                }
-                const allSolutions = db.prepare(`
-          SELECT s.*, e.embedding FROM solutions s
-          LEFT JOIN embeddings_v3 e ON e.type = 'solution' AND e.ref_id = s.id
-          ${project ? 'WHERE s.project = ?' : ''}
-          LIMIT 50
-        `).all(project ? [project] : []);
-                const scored = allSolutions.map(s => {
-                    if (!s.embedding)
-                        return { ...s, similarity: 0 };
-                    const emb = Array.from(new Float32Array(s.embedding.buffer));
-                    return { ...s, similarity: cosineSimilarity(queryEmb, emb) };
-                });
-                scored.sort((a, b) => b.similarity - a.similarity);
-                const topResults = scored.slice(0, limit);
+        `).all(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, ...(project ? [project, limit] : [limit]));
+                const results = keywordResults.map(r => ({
+                    id: r.id,
+                    errorSignature: r.error_signature,
+                    errorMessage: r.error_message,
+                    solution: r.solution,
+                    project: r.project,
+                    relatedFiles: r.related_files,
+                    created: r.created_at
+                }));
                 return {
                     content: [{
                             type: 'text',
-                            text: JSON.stringify(topResults.map(r => ({
-                                id: r.id,
-                                errorSignature: r.error_signature,
-                                solution: r.solution,
-                                similarity: Math.round(r.similarity * 100) + '%'
-                            })), null, 2)
+                            text: JSON.stringify({
+                                query,
+                                found: results.length,
+                                results
+                            }, null, 2)
                         }]
                 };
             }
@@ -1261,6 +1245,13 @@ async function handleTool(name, args) {
                 const tags = args.tags;
                 const importance = args.importance || 5;
                 const relatedTo = args.relatedTo;
+                // 필수 파라미터 검증
+                if (!content || content.trim().length === 0) {
+                    return { content: [{ type: 'text', text: 'Error: content is required and cannot be empty' }] };
+                }
+                if (!memoryType) {
+                    return { content: [{ type: 'text', text: 'Error: type is required' }] };
+                }
                 // 메모리 저장
                 const result = db.prepare(`
           INSERT INTO memories (content, memory_type, tags, project, importance, metadata)
@@ -1324,43 +1315,35 @@ async function handleTool(name, args) {
                     }
                 }
                 else {
-                    // FTS5 키워드 검색
-                    const ftsQuery = query.split(/\s+/).filter(w => w.length > 1).map(w => `"${w}"`).join(' OR ');
+                    // LIKE 기반 키워드 검색 (FTS5보다 안정적)
+                    // 검색어를 단어로 분리하여 OR 조건으로 검색
+                    const words = query.split(/\s+/).filter(w => w.length > 0);
+                    const likeConditions = words.map(() => '(content LIKE ? OR tags LIKE ?)').join(' OR ');
+                    const likeParams = [];
+                    words.forEach(w => {
+                        likeParams.push(`%${w}%`, `%${w}%`);
+                    });
                     let sql = `
-            SELECT m.* FROM memories m
-            JOIN memories_fts fts ON m.id = fts.rowid
-            WHERE memories_fts MATCH ?
-            AND m.importance >= ?
+            SELECT * FROM memories
+            WHERE (${likeConditions || 'content LIKE ?'})
+            AND importance >= ?
           `;
-                    const params = [ftsQuery || `"${query}"`, minImportance];
+                    const params = [...(likeConditions ? likeParams : [`%${query}%`]), minImportance];
                     if (memoryType && memoryType !== 'all') {
-                        sql += ` AND m.memory_type = ?`;
+                        sql += ` AND memory_type = ?`;
                         params.push(memoryType);
                     }
                     if (project) {
-                        sql += ` AND m.project = ?`;
+                        sql += ` AND project = ?`;
                         params.push(project);
                     }
                     if (tags && tags.length > 0) {
-                        sql += ` AND (${tags.map(() => 'm.tags LIKE ?').join(' OR ')})`;
+                        sql += ` AND (${tags.map(() => 'tags LIKE ?').join(' OR ')})`;
                         params.push(...tags.map(t => `%"${t}"%`));
                     }
-                    sql += ` ORDER BY m.importance DESC, m.accessed_at DESC LIMIT ?`;
+                    sql += ` ORDER BY importance DESC, accessed_at DESC LIMIT ?`;
                     params.push(limit);
-                    try {
-                        results = db.prepare(sql).all(...params);
-                    }
-                    catch {
-                        // FTS 실패 시 LIKE 폴백
-                        results = db.prepare(`
-              SELECT * FROM memories
-              WHERE (content LIKE ? OR tags LIKE ?)
-              AND importance >= ?
-              ${memoryType && memoryType !== 'all' ? 'AND memory_type = ?' : ''}
-              ${project ? 'AND project = ?' : ''}
-              ORDER BY importance DESC LIMIT ?
-            `).all(`%${query}%`, `%${query}%`, minImportance, ...(memoryType && memoryType !== 'all' ? [memoryType] : []), ...(project ? [project] : []), limit);
-                    }
+                    results = db.prepare(sql).all(...params);
                 }
                 // 접근 기록 업데이트
                 const ids = results.map(r => r.id);

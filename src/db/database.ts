@@ -1,12 +1,79 @@
 // SQLite 데이터베이스 초기화 및 관리
 import Database, { Database as DatabaseType } from 'better-sqlite3';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import type { ContentFilterPattern } from '../types.js';
 
+// ===== 경로 자동 감지 =====
+
+/**
+ * 워크스페이스 루트 자동 감지
+ * 우선순위:
+ * 1. WORKSPACE_ROOT 환경변수
+ * 2. 현재 디렉토리에서 상위 탐색 (.claude/, apps/, turbo.json)
+ * 3. 현재 작업 디렉토리
+ * 4. 홈 디렉토리 (fallback)
+ */
+function detectWorkspaceRoot(): string {
+  // 1. 환경변수 우선
+  if (process.env.WORKSPACE_ROOT) {
+    return process.env.WORKSPACE_ROOT;
+  }
+
+  // 2. 현재 디렉토리에서 상위로 탐색
+  let current = process.cwd();
+  const root = path.parse(current).root;
+
+  while (current !== root) {
+    // 모노레포 root 감지
+    if (fs.existsSync(path.join(current, 'apps'))) {
+      return current;
+    }
+    // .claude 디렉토리가 있으면 여기가 프로젝트 루트
+    if (fs.existsSync(path.join(current, '.claude'))) {
+      return current;
+    }
+    // turbo.json + package.json = 모노레포
+    if (fs.existsSync(path.join(current, 'turbo.json')) && fs.existsSync(path.join(current, 'package.json'))) {
+      return current;
+    }
+    current = path.dirname(current);
+  }
+
+  // 3. 현재 작업 디렉토리 사용 (단일 프로젝트로 간주)
+  return process.cwd();
+}
+
+/**
+ * DB 경로 결정
+ * - 워크스페이스 루트의 .claude/sessions.db
+ * - 없으면 생성
+ */
+function getDbPath(workspaceRoot: string): string {
+  const claudeDir = path.join(workspaceRoot, '.claude');
+
+  // .claude 디렉토리 생성
+  if (!fs.existsSync(claudeDir)) {
+    try {
+      fs.mkdirSync(claudeDir, { recursive: true });
+    } catch {
+      // 권한 없으면 홈 디렉토리에 생성
+      const homeClaudeDir = path.join(os.homedir(), '.claude');
+      if (!fs.existsSync(homeClaudeDir)) {
+        fs.mkdirSync(homeClaudeDir, { recursive: true });
+      }
+      return path.join(homeClaudeDir, 'sessions.db');
+    }
+  }
+
+  return path.join(claudeDir, 'sessions.db');
+}
+
 // 기본 경로 설정
-export const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/Users/ibyeongchang/Documents/dev/ai-service-generator';
+export const WORKSPACE_ROOT = detectWorkspaceRoot();
 export const APPS_DIR = path.join(WORKSPACE_ROOT, 'apps');
-const DB_PATH = path.join(WORKSPACE_ROOT, '.claude', 'sessions.db');
+const DB_PATH = getDbPath(WORKSPACE_ROOT);
 
 // 데이터베이스 인스턴스
 export const db: DatabaseType = new Database(DB_PATH);
