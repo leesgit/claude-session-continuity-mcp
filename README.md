@@ -54,15 +54,17 @@ Every new Claude Code session:
 
 ## Quick Start
 
-### One Command Installation
+### One Command Installation (Global Recommended)
 
 ```bash
-npm install claude-session-continuity-mcp
+npm install -g claude-session-continuity-mcp
 ```
 
 **That's it!** The postinstall script automatically:
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.local.json`
+
+> **Why global?** Hooks use `npx` to find commands. Global installation ensures `npx` can locate the hook scripts from any project directory.
 
 ### What Gets Installed
 
