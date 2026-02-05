@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.4.0)
+# claude-session-continuity-mcp (v1.4.3)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
@@ -64,7 +64,7 @@ npm install claude-session-continuity-mcp
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.local.json`
 
-> **v1.4.2+:** Works with both local and global installation. Hooks use `npx --no` to find local bin scripts without hitting npm registry.
+> **v1.4.3+:** Works with both local and global installation. Hooks use `npm exec --` which finds local bin scripts first, then global.
 
 ### What Gets Installed
 
@@ -84,20 +84,20 @@ npm install claude-session-continuity-mcp
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npx --no claude-hook-session-start" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npx --no claude-hook-user-prompt" }] }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-start" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-user-prompt" }] }]
   }
 }
 ```
 
-**Note (v1.4.2+):** Hooks use `npx --no` which finds local/global bin without hitting npm registry. Works with both local and global installation.
+**Note (v1.4.3+):** Hooks use `npm exec --` which finds local `node_modules/.bin` first, then falls back to global. Works with both local and global installation.
 
 ### Installed Hooks
 
 | Hook | Command | Function |
 |------|---------|----------|
-| `SessionStart` | `npx claude-hook-session-start` | Auto-loads project context on session start |
-| `UserPromptSubmit` | `npx claude-hook-user-prompt` | Auto-injects relevant memories per prompt |
+| `SessionStart` | `npm exec -- claude-hook-session-start` | Auto-loads project context on session start |
+| `UserPromptSubmit` | `npm exec -- claude-hook-user-prompt` | Auto-injects relevant memories per prompt |
 
 ### Manual Hook Management
 
@@ -185,19 +185,23 @@ npx claude-session-hooks uninstall
 export MCP_HOOKS_DISABLED=true
 ```
 
-### Why npx? (v1.4.0+)
+### Why npm exec? (v1.4.3+)
 
-Previous versions used absolute paths like:
+Previous versions used absolute paths or `npx`:
 ```json
+// v1.3.x - absolute paths (broke on multi-project)
 "command": "node \"/path/to/project-a/node_modules/.../session-start.js\""
-```
 
-This broke when installing in multiple projects. Now we use:
-```json
+// v1.4.0-1.4.2 - npx (required global install or hit npm registry)
 "command": "npx claude-hook-session-start"
 ```
 
-**npx automatically finds the correct package**, regardless of which project installed it.
+Now we use `npm exec --`:
+```json
+"command": "npm exec -- claude-hook-session-start"
+```
+
+**`npm exec --` finds local `node_modules/.bin` first**, then falls back to global. Works with both local and global installation without hitting npm registry.
 
 ---
 
