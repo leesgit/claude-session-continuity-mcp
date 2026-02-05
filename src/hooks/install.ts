@@ -120,40 +120,33 @@ function install(): void {
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');
 
-  const packagePath = getPackagePath();
-  const hooksDir = path.join(packagePath, 'hooks');
-
-  // Hook 스크립트 경로
-  const sessionStartHook = path.join(hooksDir, 'session-start.js');
-  const userPromptHook = path.join(hooksDir, 'user-prompt-submit.js');
-
-  // ===== 1. Hooks 설치 =====
-  console.log('📌 Step 1: Installing Hooks...');
+  // ===== 1. Hooks 설치 (npx 방식 - 경로 독립적) =====
+  console.log('📌 Step 1: Installing Hooks (npx mode)...');
 
   const settings = loadSettings();
 
   // 기존 hooks 유지하면서 추가
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
 
-  // SessionStart Hook
+  // SessionStart Hook - npx로 실행 (어느 프로젝트에서든 동작)
   hooks.SessionStart = [
     {
       hooks: [
         {
           type: 'command',
-          command: `node "${sessionStartHook}"`
+          command: 'npx claude-hook-session-start'
         }
       ]
     }
   ];
 
-  // UserPromptSubmit Hook
+  // UserPromptSubmit Hook - npx로 실행
   hooks.UserPromptSubmit = [
     {
       hooks: [
         {
           type: 'command',
-          command: `node "${userPromptHook}"`
+          command: 'npx claude-hook-user-prompt'
         }
       ]
     }
@@ -162,9 +155,9 @@ function install(): void {
   settings.hooks = hooks;
   saveSettings(settings);
 
-  console.log('✅ Hooks installed');
-  console.log(`   SessionStart: ${sessionStartHook}`);
-  console.log(`   UserPromptSubmit: ${userPromptHook}`);
+  console.log('✅ Hooks installed (npx mode - works in any project!)');
+  console.log('   SessionStart: npx claude-hook-session-start');
+  console.log('   UserPromptSubmit: npx claude-hook-user-prompt');
   console.log('');
 
   // ===== 2. MCP 서버 등록 =====
