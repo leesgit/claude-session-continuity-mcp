@@ -54,17 +54,17 @@ Every new Claude Code session:
 
 ## Quick Start
 
-### One Command Installation (Global Recommended)
+### One Command Installation
 
 ```bash
-npm install -g claude-session-continuity-mcp
+npm install claude-session-continuity-mcp
 ```
 
 **That's it!** The postinstall script automatically:
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.local.json`
 
-> **Why global?** Hooks use `npx` to find commands. Global installation ensures `npx` can locate the hook scripts from any project directory.
+> **v1.4.2+:** Works with both local and global installation. Hooks use `npx --no` to find local bin scripts without hitting npm registry.
 
 ### What Gets Installed
 
@@ -84,13 +84,13 @@ npm install -g claude-session-continuity-mcp
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npx claude-hook-session-start" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npx claude-hook-user-prompt" }] }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npx --no claude-hook-session-start" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npx --no claude-hook-user-prompt" }] }]
   }
 }
 ```
 
-**Note (v1.4.0+):** Hooks use `npx` commands instead of absolute paths, so they work correctly regardless of which project installed the package.
+**Note (v1.4.2+):** Hooks use `npx --no` which finds local/global bin without hitting npm registry. Works with both local and global installation.
 
 ### Installed Hooks
 

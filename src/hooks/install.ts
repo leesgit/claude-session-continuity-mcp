@@ -128,25 +128,26 @@ function install(): void {
   // 기존 hooks 유지하면서 추가
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
 
-  // SessionStart Hook - npx로 실행 (어느 프로젝트에서든 동작)
+  // SessionStart Hook - npx --no로 실행 (로컬 + 글로벌 모두 지원)
+  // --no 옵션: registry에서 다운로드하지 않고 로컬/글로벌에서만 찾음
   hooks.SessionStart = [
     {
       hooks: [
         {
           type: 'command',
-          command: 'npx claude-hook-session-start'
+          command: 'npx --no claude-hook-session-start'
         }
       ]
     }
   ];
 
-  // UserPromptSubmit Hook - npx로 실행
+  // UserPromptSubmit Hook - npx --no로 실행
   hooks.UserPromptSubmit = [
     {
       hooks: [
         {
           type: 'command',
-          command: 'npx claude-hook-user-prompt'
+          command: 'npx --no claude-hook-user-prompt'
         }
       ]
     }
@@ -155,9 +156,9 @@ function install(): void {
   settings.hooks = hooks;
   saveSettings(settings);
 
-  console.log('✅ Hooks installed (npx mode - works in any project!)');
-  console.log('   SessionStart: npx claude-hook-session-start');
-  console.log('   UserPromptSubmit: npx claude-hook-user-prompt');
+  console.log('✅ Hooks installed (npx --no mode - works with local or global install!)');
+  console.log('   SessionStart: npx --no claude-hook-session-start');
+  console.log('   UserPromptSubmit: npx --no claude-hook-user-prompt');
   console.log('');
 
   // ===== 2. MCP 서버 등록 =====
