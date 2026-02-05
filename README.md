@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v5)
+# claude-session-continuity-mcp (v1.4.0)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
@@ -20,9 +20,9 @@ Every new Claude Code session:
 
 **5 minutes of context-setting. Every. Single. Time.**
 
-## The Solution (v5)
+## The Solution
 
-v5 is **fully automatic**. Claude Hooks handle everything without manual calls:
+**Fully automatic.** Claude Hooks handle everything without manual calls:
 
 ```bash
 # Session start → Auto-loads relevant context (Git-based semantic search)
@@ -54,47 +54,65 @@ v5 is **fully automatic**. Claude Hooks handle everything without manual calls:
 
 ## Quick Start
 
-### 1. MCP Server Installation
+### One Command Installation
 
 ```bash
 npm install claude-session-continuity-mcp
 ```
 
-Add to `~/.claude.json` or `.mcp.json`:
+**That's it!** The postinstall script automatically:
+1. Registers MCP server in `~/.claude.json`
+2. Installs Claude Hooks in `~/.claude/settings.local.json`
 
+### What Gets Installed
+
+**MCP Server** (in `~/.claude.json`):
 ```json
 {
   "mcpServers": {
-    "session-continuity": {
+    "project-manager": {
       "command": "npx",
-      "args": ["claude-session-continuity-mcp"],
-      "env": {
-        "WORKSPACE_ROOT": "/path/to/your/workspace"
-      }
+      "args": ["claude-session-continuity-mcp"]
     }
   }
 }
 ```
 
-### 2. Claude Hooks Installation (v5 Auto-Capture)
-
-```bash
-cd tools/project-manager-mcp/claude-hooks
-python install_hooks.py
+**Claude Hooks** (in `~/.claude/settings.local.json`):
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npx claude-hook-session-start" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npx claude-hook-user-prompt" }] }]
+  }
+}
 ```
 
-This registers automatic context hooks in `~/.claude/settings.local.json`.
+**Note (v1.4.0+):** Hooks use `npx` commands instead of absolute paths, so they work correctly regardless of which project installed the package.
 
-**Installed Hooks:**
+### Installed Hooks
 
-| Hook | File | Function |
-|------|------|----------|
-| `SessionStart` | `session_start.py` | Auto-loads relevant context via semantic search on session start |
-| `PrePromptSubmit` | `pre_prompt_submit.py` | Auto-injects memories/solutions related to your query |
-| `PostPromptSubmit` | `post_prompt_submit.py` | Auto-captures important info (decision, error, learning, etc.) |
-| `SessionEnd` | `session_end.py` | Auto-saves sessions/memories based on Git commits |
+| Hook | Command | Function |
+|------|---------|----------|
+| `SessionStart` | `npx claude-hook-session-start` | Auto-loads project context on session start |
+| `UserPromptSubmit` | `npx claude-hook-user-prompt` | Auto-injects relevant memories per prompt |
 
-### 3. That's it. Fully automatic.
+### Manual Hook Management
+
+```bash
+# Check hook status
+npx claude-session-hooks status
+
+# Reinstall hooks
+npx claude-session-hooks install
+
+# Remove hooks
+npx claude-session-hooks uninstall
+```
+
+### 3. Restart Claude Code
+
+After installation, restart Claude Code to activate the hooks.
 
 ---
 
@@ -115,84 +133,69 @@ This registers automatic context hooks in `~/.claude/settings.local.json`.
 
 ---
 
-## Claude Hooks (v5) - Auto-Capture System
+## Claude Hooks - Auto Context System
 
-### Directory Structure
+### How It Works
 
-```
-claude-hooks/
-├── session_start.py      # Session start - Semantic context load
-├── pre_prompt_submit.py  # Pre-prompt - Query-based memory injection
-├── post_prompt_submit.py # Post-prompt - Auto memory capture
-├── session_end.py        # Session end - Git-based save
-└── install_hooks.py      # Install script
-```
+**SessionStart Hook** (`npx claude-hook-session-start`):
+- Detects current project from `apps/` directory or `package.json`
+- Loads context from `~/.claude/sessions.db`
+- Injects: Tech stack, current state, pending tasks, recent memories
 
-### session_start.py - Semantic Context Load
+**UserPromptSubmit Hook** (`npx claude-hook-user-prompt`):
+- Runs on every prompt submission
+- Injects relevant context based on current project
 
-Auto-loads relevant memories via **4-phase multi-stage search** on session start:
+### Example Output (Session Start)
 
-```
-Phase 0: Semantic search (embedding similarity based on Git keywords)
-Phase 1: Git commit keyword FTS search
-Phase 2: Recent 7-day memories
-Phase 3: Important tags (decision, error)
-Phase 4: Fallback (general context)
-```
+```markdown
+# 🚀 my-app - Session Resumed
 
-### pre_prompt_submit.py - Query-Based Injection
+## Tech Stack
+**framework**: Next.js, **language**: TypeScript
 
-Auto-injects **only memories/solutions related** to user's query:
+## Current State
+📍 Implementing signup form
+🚧 **Blocker**: OAuth callback URL issue
 
-```python
-# Example: When asking "How to fix OAuth error"
-→ Search OAuth-related memories (FTS + keyword)
-→ Search error-type solutions
-→ Auto-add to context
+## 📋 Pending Tasks
+- 🔄 [P8] Implement form validation
+- ⏳ [P5] Add error handling
+
+## 🧠 Key Memories
+- 🎯 [decision] Decided on App Router, using Server Actions
+- ⚠️ [error] OAuth redirect_uri mismatch → check env file
 ```
 
-### post_prompt_submit.py - Auto Memory Capture
-
-Auto-detects and saves **6 types** from conversation content:
-
-| Type | Detection Patterns (Multilingual) | Example |
-|------|-----------------------------------|---------|
-| `decision` | "decided", "chose", "결정", "選択" | Architecture decisions |
-| `error` | "fixed", "solved", "에러", "解決" | Bug fixes |
-| `learning` | "learned", "discovered", "배웠", "学んだ" | New knowledge |
-| `implementation` | "implemented", "completed", "구현", "実装" | Feature implementation |
-| `important` | "critical", "must", "중요", "重要" | Important notes |
-| `code` | Code blocks (100+ chars) | Code snippets |
-
-**User Overrides:**
-- `#remember` / `#기억` / `#覚える` - Force save
-- `#skip` / `#무시` / `#スキップ` - Don't save
-
-### session_end.py - Git-Based Save
-
-Saves sessions/memories **only when commits exist** (noise prevention):
-
-```
-1. New commit detected → Save session + memory
-2. Only uncommitted changes → Update active_context only
-3. Track commit hash → Prevent duplicate saves
-```
-
-### Install/Remove
+### Hook Management
 
 ```bash
-# Install
-cd claude-hooks && python install_hooks.py
+# Check status
+npx claude-session-hooks status
+
+# Reinstall
+npx claude-session-hooks install
 
 # Remove
-python install_hooks.py --remove
-
-# Check status
-python install_hooks.py --status
+npx claude-session-hooks uninstall
 
 # Temporarily disable
 export MCP_HOOKS_DISABLED=true
 ```
+
+### Why npx? (v1.4.0+)
+
+Previous versions used absolute paths like:
+```json
+"command": "node \"/path/to/project-a/node_modules/.../session-start.js\""
+```
+
+This broke when installing in multiple projects. Now we use:
+```json
+"command": "npx claude-hook-session-start"
+```
+
+**npx automatically finds the correct package**, regardless of which project installed it.
 
 ---
 
