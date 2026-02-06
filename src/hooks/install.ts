@@ -120,34 +120,72 @@ function install(): void {
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');
 
-  // ===== 1. Hooks 설치 (npx 방식 - 경로 독립적) =====
-  console.log('📌 Step 1: Installing Hooks (npx mode)...');
+  // ===== 1. Hooks 설치 (npm exec 방식 - 경로 독립적) =====
+  console.log('📌 Step 1: Installing Hooks (npm exec mode)...');
 
   const settings = loadSettings();
 
   // 기존 hooks 유지하면서 추가
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
 
-  // SessionStart Hook - npx --no로 실행 (로컬 + 글로벌 모두 지원)
-  // --no 옵션: registry에서 다운로드하지 않고 로컬/글로벌에서만 찾음
+  // SessionStart Hook - 세션 시작 시 컨텍스트 로드
   hooks.SessionStart = [
     {
       hooks: [
         {
           type: 'command',
-          command: 'npx --no claude-hook-session-start'
+          command: 'npm exec -- claude-hook-session-start'
         }
       ]
     }
   ];
 
-  // UserPromptSubmit Hook - npx --no로 실행
+  // UserPromptSubmit Hook - 프롬프트 제출 시 관련 컨텍스트 주입
   hooks.UserPromptSubmit = [
     {
       hooks: [
         {
           type: 'command',
-          command: 'npx --no claude-hook-user-prompt'
+          command: 'npm exec -- claude-hook-user-prompt'
+        }
+      ]
+    }
+  ];
+
+  // PostToolUse Hook - 파일 변경 시 자동 기록 (Edit, Write)
+  hooks.PostToolUse = [
+    {
+      matcher: {
+        tool_name: 'Edit|Write'
+      },
+      hooks: [
+        {
+          type: 'command',
+          command: 'npm exec -- claude-hook-post-tool'
+        }
+      ]
+    }
+  ];
+
+  // PreCompact Hook - 컨텍스트 압축 전 중요 정보 저장
+  hooks.PreCompact = [
+    {
+      hooks: [
+        {
+          type: 'command',
+          command: 'npm exec -- claude-hook-pre-compact'
+        }
+      ]
+    }
+  ];
+
+  // Stop Hook - 세션 종료 시 자동 저장
+  hooks.Stop = [
+    {
+      hooks: [
+        {
+          type: 'command',
+          command: 'npm exec -- claude-hook-session-end'
         }
       ]
     }
@@ -156,9 +194,12 @@ function install(): void {
   settings.hooks = hooks;
   saveSettings(settings);
 
-  console.log('✅ Hooks installed (npx --no mode - works with local or global install!)');
-  console.log('   SessionStart: npx --no claude-hook-session-start');
-  console.log('   UserPromptSubmit: npx --no claude-hook-user-prompt');
+  console.log('✅ Hooks installed (npm exec mode - works with local or global install!)');
+  console.log('   SessionStart: context auto-load');
+  console.log('   UserPromptSubmit: relevant memory injection');
+  console.log('   PostToolUse: file change tracking (Edit, Write)');
+  console.log('   PreCompact: save before context compression');
+  console.log('   Stop: auto-save session on exit');
   console.log('');
 
   // ===== 2. MCP 서버 등록 =====
@@ -193,6 +234,9 @@ function uninstall(): void {
   // session-continuity 관련 Hook만 제거
   delete hooks.SessionStart;
   delete hooks.UserPromptSubmit;
+  delete hooks.PostToolUse;
+  delete hooks.PreCompact;
+  delete hooks.Stop;
 
   if (Object.keys(hooks).length === 0) {
     delete settings.hooks;

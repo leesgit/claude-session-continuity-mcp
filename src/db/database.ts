@@ -282,6 +282,116 @@ export function loadContentFilterPatterns() {
   }
 }
 
+// ===== 백업 시스템 =====
+
+const BACKUP_DIR = path.join(os.homedir(), '.claude', 'backups');
+const MAX_BACKUPS = 5;
+
+/**
+ * DB 백업 생성
+ * - 최대 5개 유지
+ * - 하루에 한 번만 백업
+ */
+export function createBackup(): string | null {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const backupPath = path.join(BACKUP_DIR, `sessions-${today}.db`);
+
+    // 오늘 이미 백업했으면 스킵
+    if (fs.existsSync(backupPath)) {
+      return backupPath;
+    }
+
+    // SQLite 백업 (VACUUM INTO)
+    db.exec(`VACUUM INTO '${backupPath}'`);
+
+    // 오래된 백업 삭제
+    cleanupOldBackups();
+
+    return backupPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 오래된 백업 삭제 (MAX_BACKUPS 개수 유지)
+ */
+function cleanupOldBackups(): void {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('sessions-') && f.endsWith('.db'))
+      .map(f => ({
+        name: f,
+        path: path.join(BACKUP_DIR, f),
+        time: fs.statSync(path.join(BACKUP_DIR, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.time - a.time);
+
+    // MAX_BACKUPS 초과분 삭제
+    for (const file of files.slice(MAX_BACKUPS)) {
+      fs.unlinkSync(file.path);
+    }
+  } catch {
+    // 무시
+  }
+}
+
+/**
+ * 백업에서 복원
+ */
+export function restoreFromBackup(backupPath: string): boolean {
+  try {
+    if (!fs.existsSync(backupPath)) {
+      return false;
+    }
+
+    // 현재 DB 닫기
+    db.close();
+
+    // 백업으로 교체
+    fs.copyFileSync(backupPath, DB_PATH);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 백업 목록 조회
+ */
+export function listBackups(): Array<{ name: string; path: string; date: string; size: number }> {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      return [];
+    }
+
+    return fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('sessions-') && f.endsWith('.db'))
+      .map(f => {
+        const filePath = path.join(BACKUP_DIR, f);
+        const stat = fs.statSync(filePath);
+        return {
+          name: f,
+          path: filePath,
+          date: f.replace('sessions-', '').replace('.db', ''),
+          size: stat.size
+        };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  } catch {
+    return [];
+  }
+}
+
 // 초기화
 initDatabase();
 loadContentFilterPatterns();
+
+// 시작 시 백업 생성 (하루 한 번)
+createBackup();
