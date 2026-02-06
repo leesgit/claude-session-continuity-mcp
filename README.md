@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.4.3)
+# claude-session-continuity-mcp (v1.5.0)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
@@ -64,7 +64,7 @@ npm install claude-session-continuity-mcp
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.local.json`
 
-> **v1.4.3+:** Works with both local and global installation. Hooks use `npm exec --` which finds local bin scripts first, then global.
+> **v1.5.0+:** Full lifecycle hooks! SessionStart, PostToolUse (file tracking), PreCompact (save before compression), and Stop (auto-save on exit). Works with both local and global installation.
 
 ### What Gets Installed
 
@@ -85,19 +85,25 @@ npm install claude-session-continuity-mcp
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-start" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-user-prompt" }] }]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-user-prompt" }] }],
+    "PostToolUse": [{ "matcher": { "tool_name": "Edit|Write" }, "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-post-tool" }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-pre-compact" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-end" }] }]
   }
 }
 ```
 
-**Note (v1.4.3+):** Hooks use `npm exec --` which finds local `node_modules/.bin` first, then falls back to global. Works with both local and global installation.
+**Note (v1.5.0+):** Full lifecycle coverage with 5 hooks. Uses `npm exec --` which finds local `node_modules/.bin` first.
 
-### Installed Hooks
+### Installed Hooks (v1.5.0+)
 
 | Hook | Command | Function |
 |------|---------|----------|
-| `SessionStart` | `npm exec -- claude-hook-session-start` | Auto-loads project context on session start |
-| `UserPromptSubmit` | `npm exec -- claude-hook-user-prompt` | Auto-injects relevant memories per prompt |
+| `SessionStart` | `claude-hook-session-start` | Auto-loads project context on session start |
+| `UserPromptSubmit` | `claude-hook-user-prompt` | Auto-injects relevant memories per prompt |
+| `PostToolUse` | `claude-hook-post-tool` | Tracks file changes (Edit, Write) automatically |
+| `PreCompact` | `claude-hook-pre-compact` | Saves important context before compression |
+| `Stop` | `claude-hook-session-end` | Auto-saves session on exit (no manual call needed) |
 
 ### Manual Hook Management
 
@@ -132,6 +138,10 @@ After installation, restart Claude Code to activate the hooks.
 | ✅ **Integrated Verification** | One-click build/test/lint execution |
 | 📋 **Task Management** | Priority-based task management |
 | 🔧 **Solution Archive** | Auto-search error solutions |
+| 📁 **File Change Tracking** | **(v1.5.0)** Auto-track Edit/Write tool usage |
+| 💾 **Auto Backup** | **(v1.5.0)** Daily SQLite backup (max 5) |
+| 🛡️ **PreCompact Save** | **(v1.5.0)** Save context before compression |
+| 🚪 **Auto Session End** | **(v1.5.0)** No manual session_end needed |
 
 ---
 
