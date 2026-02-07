@@ -61,7 +61,7 @@ export function recordSolution(
       .join(',');
 
     const stmt = db.prepare(`
-      INSERT INTO resolved_issues (project, error_signature, error_message, solution, related_files, keywords)
+      INSERT INTO solutions (project, error_signature, error_message, solution, related_files, keywords)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
@@ -99,7 +99,7 @@ export function findSolution(errorText: string, project?: string): CallToolResul
 
     let sql = `
       SELECT id, project, error_signature, error_message, solution, related_files, created_at
-      FROM resolved_issues
+      FROM solutions
       WHERE (
         error_signature LIKE ?
         OR error_message LIKE ?
@@ -175,7 +175,7 @@ export function getContinuityStats(project?: string): CallToolResult {
       const taskCount = taskCountStmt.get(project) as { count: number };
       stats.totalTasks = taskCount.count;
 
-      const issueCountStmt = db.prepare('SELECT COUNT(*) as count FROM resolved_issues WHERE project = ?');
+      const issueCountStmt = db.prepare('SELECT COUNT(*) as count FROM solutions WHERE project = ?');
       const issueCount = issueCountStmt.get(project) as { count: number };
       stats.resolvedIssues = issueCount.count;
     } else {
@@ -189,7 +189,7 @@ export function getContinuityStats(project?: string): CallToolResult {
       const totalTasksStmt = db.prepare('SELECT COUNT(*) as count FROM tasks');
       stats.totalTasks = (totalTasksStmt.get() as { count: number }).count;
 
-      const totalIssuesStmt = db.prepare('SELECT COUNT(*) as count FROM resolved_issues');
+      const totalIssuesStmt = db.prepare('SELECT COUNT(*) as count FROM solutions');
       stats.totalResolvedIssues = (totalIssuesStmt.get() as { count: number }).count;
 
       const totalMemoriesStmt = db.prepare('SELECT COUNT(*) as count FROM memories');

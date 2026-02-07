@@ -1,10 +1,10 @@
-# claude-session-continuity-mcp (v1.5.0)
+# claude-session-continuity-mcp (v1.6.0)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-51%20passed-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)]()
 
 ## The Problem
@@ -64,7 +64,7 @@ npm install claude-session-continuity-mcp
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.local.json`
 
-> **v1.5.0+:** Full lifecycle hooks! SessionStart, PostToolUse (file tracking), PreCompact (save before compression), and Stop (auto-save on exit). Works with both local and global installation.
+> **v1.6.0:** Multilingual semantic search (94+ languages), cross-language search (EN↔KR), solution semantic search. Full lifecycle hooks with 5 auto-hooks.
 
 ### What Gets Installed
 
@@ -130,8 +130,8 @@ After installation, restart Claude Code to activate the hooks.
 |---------|-------------|
 | 🤖 **Zero Manual Work** | Claude Hooks automate all context capture/load |
 | 🎯 **Query-Based Injection** | Selectively inject only relevant memories/solutions |
-| 🧠 **Semantic Search** | MiniLM-L6-v2 embedding-based meaning search |
-| 🌍 **Multilingual Patterns** | Auto-detect Korean/English/Japanese patterns |
+| 🧠 **Semantic Search** | multilingual-e5-small embedding (94+ languages, 384d) |
+| 🌍 **Multilingual** | Korean/English/Japanese + cross-language search (EN→KR, KR→EN) |
 | 🔗 **Git Integration** | Commit messages auto-memorized |
 | 🕸️ **Knowledge Graph** | Memory relations (solves, causes, extends...) |
 | 📊 **Memory Classification** | 6 types: observation, decision, learning, error, pattern, code |
@@ -278,8 +278,8 @@ solution_record({
   solution: "Use optional chaining: user?.id"
 })
 
-// Find similar solutions
-solution_find({ query: "TypeError property" })
+// Find similar solutions (keyword or semantic)
+solution_find({ query: "TypeError property", semantic: true })
 
 // AI-powered solution suggestion
 solution_suggest({ errorMessage: "Cannot read property 'email'" })
@@ -383,7 +383,7 @@ SQLite database at `~/.claude/sessions.db`:
 | `memories` | Classified memories (observation, decision, learning, error, pattern) |
 | `memories_fts` | Full-text search index (FTS5) |
 | `memory_relations` | Knowledge graph relations |
-| `embeddings_v4` | Semantic search vectors (MiniLM-L6-v2) |
+| `embeddings_v4` | Semantic search vectors (multilingual-e5-small, 384d) |
 | `project_context` | Fixed project info (tech stack, decisions) |
 | `active_context` | Current work state |
 | `tasks` | Task backlog |
@@ -446,11 +446,13 @@ npm run test:coverage
 - [x] Semantic search (embeddings)
 - [x] Multilingual pattern detection (KO/EN/JA)
 - [x] Git commit integration
-- [x] 111 tests
+- [x] 51 tests (32 feature + 19 continuity)
 - [x] GitHub Actions CI/CD
-- [ ] Test coverage 80%+
+- [x] Multilingual semantic search (v1.6.0 - multilingual-e5-small)
+- [x] Cross-language search EN↔KR (v1.6.0)
+- [x] Solution semantic search (v1.6.0)
+- [ ] sqlite-vec native vector search (v2 - when data > 1000 records)
 - [ ] Web dashboard
-- [ ] Docker image
 - [ ] Cloud sync option
 
 ---

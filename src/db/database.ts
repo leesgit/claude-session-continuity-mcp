@@ -178,7 +178,7 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS embeddings (
       memory_id INTEGER PRIMARY KEY,
       embedding BLOB NOT NULL,
-      model TEXT DEFAULT 'all-MiniLM-L6-v2',
+      model TEXT DEFAULT 'multilingual-e5-small',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
     );
@@ -238,8 +238,8 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project, status);
     CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority DESC);
 
-    -- Layer 3: 해결된 이슈 아카이브
-    CREATE TABLE IF NOT EXISTS resolved_issues (
+    -- Layer 3: 솔루션 아카이브 (index.ts의 solutions 테이블과 통일)
+    CREATE TABLE IF NOT EXISTS solutions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project TEXT,
       error_signature TEXT NOT NULL,
@@ -250,8 +250,8 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE INDEX IF NOT EXISTS idx_issues_signature ON resolved_issues(error_signature);
-    CREATE INDEX IF NOT EXISTS idx_issues_project ON resolved_issues(project);
+    CREATE INDEX IF NOT EXISTS idx_solutions_signature ON solutions(error_signature);
+    CREATE INDEX IF NOT EXISTS idx_solutions_project ON solutions(project);
   `);
 }
 

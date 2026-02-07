@@ -102,7 +102,7 @@ export async function handleLearn(args: unknown): Promise<CallToolResult> {
       case 'fix':
         metadata.solution = data.solution;
         metadata.preventionTip = data.preventionTip;
-        // resolved_issues에도 저장
+        // solutions에도 저장
         saveResolvedIssue(data);
         break;
       case 'pattern':
@@ -174,7 +174,7 @@ function saveResolvedIssue(data: {
       .substring(0, 200);
 
     const stmt = db.prepare(`
-      INSERT INTO resolved_issues (project, error_signature, error_message, solution, related_files, keywords)
+      INSERT INTO solutions (project, error_signature, error_message, solution, related_files, keywords)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
@@ -210,10 +210,10 @@ export async function handleRecallSolution(args: unknown): Promise<CallToolResul
 
     const { query, project } = parsed.data;
 
-    // 1. resolved_issues에서 검색
+    // 1. solutions에서 검색
     let issuesSql = `
       SELECT id, project, error_message, solution, related_files, created_at
-      FROM resolved_issues
+      FROM solutions
       WHERE error_message LIKE ? OR keywords LIKE ?
     `;
     const params: unknown[] = [`%${query.substring(0, 50)}%`, `%${query.split(' ')[0]}%`];
@@ -254,7 +254,7 @@ export async function handleRecallSolution(args: unknown): Promise<CallToolResul
 
     const solutions = [
       ...issues.map(i => ({
-        source: 'resolved_issues',
+        source: 'solutions',
         id: i.id,
         project: i.project,
         error: i.error_message.substring(0, 200),

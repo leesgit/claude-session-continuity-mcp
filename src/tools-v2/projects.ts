@@ -176,7 +176,7 @@ async function getProjectDetail(project: string): Promise<CallToolResult> {
 
   // 해결된 이슈
   const resolvedIssues = db.prepare(`
-    SELECT id, error_message, solution FROM resolved_issues
+    SELECT id, error_message, solution FROM solutions
     WHERE project = ? ORDER BY created_at DESC LIMIT 3
   `).all(project) as Array<{ id: number; error_message: string; solution: string }>;
 

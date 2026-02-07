@@ -215,7 +215,7 @@ db.exec(`
     entity_type TEXT NOT NULL,
     entity_id INTEGER NOT NULL,
     embedding BLOB NOT NULL,
-    model TEXT DEFAULT 'all-MiniLM-L6-v2',
+    model TEXT DEFAULT 'multilingual-e5-small',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(entity_type, entity_id)
   );
@@ -228,7 +228,7 @@ let embeddingPipeline: unknown = null;
 async function initEmbedding() {
   if (embeddingPipeline) return;
   try {
-    embeddingPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+    embeddingPipeline = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small');
   } catch (error) {
     console.error('Failed to load embedding model:', error);
   }
@@ -237,13 +237,14 @@ async function initEmbedding() {
 // 백그라운드 로드
 initEmbedding();
 
-async function generateEmbedding(text: string): Promise<number[] | null> {
+async function generateEmbedding(text: string, type: 'query' | 'passage' = 'query'): Promise<number[] | null> {
   if (!embeddingPipeline) await initEmbedding();
   if (!embeddingPipeline) return null;
 
   try {
+    const prefixedText = `${type}: ${text}`;
     const output = await (embeddingPipeline as (text: string, options: { pooling: string; normalize: boolean }) => Promise<{ data: Float32Array }>)(
-      text,
+      prefixedText,
       { pooling: 'mean', normalize: true }
     );
     return Array.from(output.data);
@@ -551,13 +552,14 @@ const tools: Tool[] = [
   },
   {
     name: 'solution_find',
-    description: '유사한 에러의 해결 방법을 검색합니다.',
+    description: '유사한 에러의 해결 방법을 검색합니다. semantic=true로 시맨틱 검색 가능.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: '에러 메시지 또는 키워드' },
         project: { type: 'string', description: '프로젝트 (선택)' },
-        limit: { type: 'number', description: '결과 개수 (기본: 3)' }
+        limit: { type: 'number', description: '결과 개수 (기본: 3)' },
+        semantic: { type: 'boolean', description: '시맨틱 검색 사용 (기본: false, 임베딩 기반)' }
       },
       required: ['query']
     }
@@ -909,7 +911,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
         const scored = await Promise.all(allSessions.map(async (s) => {
           const text = `${s.last_work} ${s.current_status || ''}`;
-          const emb = await generateEmbedding(text);
+          const emb = await generateEmbedding(text, 'passage');
           const similarity = emb ? cosineSimilarity(queryEmbedding, emb) : 0;
           return { ...s, similarity };
         }));
@@ -1206,7 +1208,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         );
 
         // 임베딩 저장 (시맨틱 검색용) - embeddings_v4 사용
-        generateEmbedding(`${errorSignature} ${errorMessage || ''} ${solution}`).then(embedding => {
+        generateEmbedding(`${errorSignature} ${errorMessage || ''} ${solution}`, 'passage').then(embedding => {
           if (embedding) {
             const buffer = Buffer.from(new Float32Array(embedding).buffer);
             db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)').run('solution', result.lastInsertRowid, buffer);
@@ -1225,25 +1227,64 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         const query = args.query as string;
         const project = args.project as string | undefined;
         const limit = (args.limit as number) || 3;
+        const semantic = args.semantic === true;
 
-        // 키워드 검색 (LIKE 기반, 안정적)
-        const keywordResults = db.prepare(`
-          SELECT * FROM solutions
-          WHERE error_signature LIKE ? OR error_message LIKE ? OR solution LIKE ? OR keywords LIKE ?
-          ${project ? 'AND project = ?' : ''}
-          ORDER BY created_at DESC LIMIT ?
-        `).all(
-          `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`,
-          ...(project ? [project, limit] : [limit])
-        ) as Array<Record<string, unknown>>;
+        let solutionResults: Array<Record<string, unknown>> = [];
 
-        const results = keywordResults.map(r => ({
+        if (semantic) {
+          // 시맨틱 검색 (임베딩 기반)
+          const queryEmb = await generateEmbedding(query);
+          if (queryEmb) {
+            const allSolutions = db.prepare(`
+              SELECT s.*, e.embedding FROM solutions s
+              LEFT JOIN embeddings_v4 e ON e.entity_type = 'solution' AND e.entity_id = s.id
+              ${project ? 'WHERE s.project = ?' : ''}
+              ORDER BY s.created_at DESC LIMIT 50
+            `).all(
+              ...(project ? [project] : [])
+            ) as Array<Record<string, unknown>>;
+
+            const scored = allSolutions.map(s => {
+              if (!s.embedding) return { ...s, similarity: 0 };
+              const emb = Array.from(new Float32Array((s.embedding as Buffer).buffer));
+              return { ...s, similarity: cosineSimilarity(queryEmb, emb) };
+            });
+
+            scored.sort((a, b) => (b.similarity as number) - (a.similarity as number));
+            solutionResults = scored.filter(s => (s.similarity as number) > 0.3).slice(0, limit);
+          }
+        } else {
+          // 키워드 검색 (LIKE 기반, 단어별 OR)
+          const words = query.split(/\s+/).filter(w => w.length > 0);
+          const wordConditions = words.map(() =>
+            '(error_signature LIKE ? OR error_message LIKE ? OR solution LIKE ? OR keywords LIKE ?)'
+          ).join(' OR ');
+          const wordParams: unknown[] = [];
+          words.forEach(w => {
+            wordParams.push(`%${w}%`, `%${w}%`, `%${w}%`, `%${w}%`);
+          });
+
+          let sql = `SELECT * FROM solutions WHERE (${wordConditions || 'error_signature LIKE ?'})`;
+          const params: unknown[] = wordConditions ? wordParams : [`%${query}%`];
+
+          if (project) {
+            sql += ` AND project = ?`;
+            params.push(project);
+          }
+          sql += ` ORDER BY created_at DESC LIMIT ?`;
+          params.push(limit);
+
+          solutionResults = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+        }
+
+        const results = solutionResults.map(r => ({
           id: r.id,
           errorSignature: r.error_signature,
           errorMessage: r.error_message,
           solution: r.solution,
           project: r.project,
           relatedFiles: r.related_files,
+          similarity: r.similarity ? Math.round((r.similarity as number) * 100) + '%' : undefined,
           created: r.created_at
         }));
 
@@ -1252,6 +1293,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
             type: 'text',
             text: JSON.stringify({
               query,
+              mode: semantic ? 'semantic' : 'keyword',
               found: results.length,
               results
             }, null, 2)
@@ -1447,7 +1489,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         const memoryId = result.lastInsertRowid as number;
 
         // 임베딩 생성 (비동기)
-        generateEmbedding(content).then(embedding => {
+        generateEmbedding(content, 'passage').then(embedding => {
           if (embedding) {
             const buffer = Buffer.from(new Float32Array(embedding).buffer);
             db.prepare(`

@@ -15,7 +15,7 @@ export async function initEmbedding() {
   if (embeddingPipeline) return;
   try {
     console.error('Loading embedding model (first time may take a while)...');
-    embeddingPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+    embeddingPipeline = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small');
     embeddingReady = true;
     console.error('Embedding model loaded successfully!');
   } catch (error) {
@@ -26,15 +26,16 @@ export async function initEmbedding() {
 // 백그라운드에서 모델 로드 시작
 initEmbedding();
 
-export async function generateEmbedding(text: string): Promise<number[] | null> {
+export async function generateEmbedding(text: string, type: 'query' | 'passage' = 'query'): Promise<number[] | null> {
   if (!embeddingPipeline) {
     await initEmbedding();
   }
   if (!embeddingPipeline) return null;
 
   try {
+    const prefixedText = `${type}: ${text}`;
     const output = await (embeddingPipeline as (text: string, options: { pooling: string; normalize: boolean }) => Promise<{ data: Float32Array }>)(
-      text,
+      prefixedText,
       { pooling: 'mean', normalize: true }
     );
     return Array.from(output.data);
