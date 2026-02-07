@@ -150,7 +150,7 @@ After installation, restart Claude Code to activate the hooks.
 ### How It Works
 
 **SessionStart Hook** (`npx claude-hook-session-start`):
-- Detects current project from `apps/` directory or `package.json`
+- Auto-detects project: monorepo (`apps/project-name/`) or single project (`package.json` root folder name)
 - Loads context from `~/.claude/sessions.db`
 - Injects: Tech stack, current state, pending tasks, recent memories
 
