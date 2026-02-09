@@ -1,10 +1,10 @@
-# claude-session-continuity-mcp (v1.6.0)
+# claude-session-continuity-mcp (v1.6.2)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-51%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)]()
 
 ## The Problem
@@ -62,9 +62,9 @@ npm install claude-session-continuity-mcp
 
 **That's it!** The postinstall script automatically:
 1. Registers MCP server in `~/.claude.json`
-2. Installs Claude Hooks in `~/.claude/settings.local.json`
+2. Installs Claude Hooks in `~/.claude/settings.json`
 
-> **v1.6.0:** Multilingual semantic search (94+ languages), cross-language search (EN↔KR), solution semantic search. Full lifecycle hooks with 5 auto-hooks.
+> **v1.6.1:** Fixed critical bug where hooks were installed to wrong settings file. Now correctly installs to `~/.claude/settings.json`. Auto-migrates existing users from `settings.local.json`.
 
 ### What Gets Installed
 
@@ -80,7 +80,7 @@ npm install claude-session-continuity-mcp
 }
 ```
 
-**Claude Hooks** (in `~/.claude/settings.local.json`):
+**Claude Hooks** (in `~/.claude/settings.json`):
 ```json
 {
   "hooks": {
@@ -446,11 +446,13 @@ npm run test:coverage
 - [x] Semantic search (embeddings)
 - [x] Multilingual pattern detection (KO/EN/JA)
 - [x] Git commit integration
-- [x] 51 tests (32 feature + 19 continuity)
+- [x] 111 tests (6 test suites)
 - [x] GitHub Actions CI/CD
 - [x] Multilingual semantic search (v1.6.0 - multilingual-e5-small)
 - [x] Cross-language search EN↔KR (v1.6.0)
 - [x] Solution semantic search (v1.6.0)
+- [x] Fix hooks settings file path (v1.6.1 - settings.json, not settings.local.json)
+- [x] Auto-migrate legacy hooks (v1.6.1)
 - [ ] sqlite-vec native vector search (v2 - when data > 1000 records)
 - [ ] Web dashboard
 - [ ] Cloud sync option
