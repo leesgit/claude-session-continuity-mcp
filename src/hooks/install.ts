@@ -3,7 +3,7 @@
  * Claude Code Hooks + MCP Server 자동 설치 스크립트
  *
  * npm install 시 자동으로:
- * 1. ~/.claude/settings.local.json에 Hook 등록
+ * 1. ~/.claude/settings.json에 Hook 등록
  * 2. ~/.claude.json에 MCP 서버 등록
  */
 
@@ -16,7 +16,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
-const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.local.json');
+const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
+const LEGACY_SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.local.json');
 const MCP_CONFIG_FILE = path.join(os.homedir(), '.claude.json');
 
 // 설치된 패키지 경로 찾기
@@ -39,6 +40,29 @@ function getPackagePath(): string {
 
   // 3. 현재 패키지 디렉토리 (ESM 호환)
   return path.dirname(__dirname);
+}
+
+function migrateLegacyHooks(): void {
+  if (!fs.existsSync(LEGACY_SETTINGS_FILE)) return;
+
+  try {
+    const legacy = JSON.parse(fs.readFileSync(LEGACY_SETTINGS_FILE, 'utf-8'));
+    const legacyHooks = legacy.hooks;
+    if (!legacyHooks) return;
+
+    // Remove hooks from legacy file
+    delete legacy.hooks;
+    if (Object.keys(legacy).length === 0 || (Object.keys(legacy).length === 1 && legacy.permissions)) {
+      // Only permissions left or empty - can clean up
+      fs.writeFileSync(LEGACY_SETTINGS_FILE, JSON.stringify(legacy, null, 2));
+    } else {
+      fs.writeFileSync(LEGACY_SETTINGS_FILE, JSON.stringify(legacy, null, 2));
+    }
+
+    console.log('🔄 Migrated hooks from settings.local.json → settings.json');
+  } catch {
+    // Ignore migration errors
+  }
 }
 
 function loadSettings(): Record<string, unknown> {
@@ -119,6 +143,9 @@ function install(): void {
   console.log('║   Claude Session Continuity MCP - Installation             ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');
+
+  // ===== 0. Migrate from settings.local.json if needed =====
+  migrateLegacyHooks();
 
   // ===== 1. Hooks 설치 (npm exec 방식 - 경로 독립적) =====
   console.log('📌 Step 1: Installing Hooks (npm exec mode)...');

@@ -1492,10 +1492,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         generateEmbedding(content, 'passage').then(embedding => {
           if (embedding) {
             const buffer = Buffer.from(new Float32Array(embedding).buffer);
-            db.prepare(`
-              INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding)
-              VALUES ('memory', ?, ?)
-            `).run(memoryId, buffer);
+            db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)').run('memory', memoryId, buffer);
           }
         }).catch(() => {});
 
