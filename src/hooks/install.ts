@@ -152,78 +152,49 @@ function install(): void {
 
   const settings = loadSettings();
 
-  // 기존 hooks 유지하면서 추가
+  // 기존 hooks 유지하면서 우리 훅만 추가/교체
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
 
-  // SessionStart Hook - 세션 시작 시 컨텍스트 로드
-  hooks.SessionStart = [
-    {
-      hooks: [
-        {
-          type: 'command',
-          command: 'npm exec -- claude-hook-session-start'
-        }
-      ]
-    }
-  ];
+  // 우리 훅 명령어 prefix (이걸로 우리 훅인지 판별)
+  const OUR_PREFIX = 'claude-hook-';
 
-  // UserPromptSubmit Hook - 프롬프트 제출 시 관련 컨텍스트 주입
-  hooks.UserPromptSubmit = [
-    {
-      hooks: [
-        {
-          type: 'command',
-          command: 'npm exec -- claude-hook-user-prompt'
-        }
-      ]
-    }
-  ];
+  /**
+   * 기존 훅 배열에서 우리 훅만 제거하고, 새 훅을 추가
+   * 사용자 커스텀 훅은 보존됨
+   */
+  function mergeHooks(event: string, ourEntries: unknown[]): void {
+    const existing = (hooks[event] || []) as Array<{ hooks?: Array<{ command?: string }>; matcher?: string }>;
 
-  // PostToolUse Hook - 파일 변경 시 자동 기록 (Edit, Write)
-  hooks.PostToolUse = [
-    {
-      matcher: 'Edit',
-      hooks: [
-        {
-          type: 'command',
-          command: 'npm exec -- claude-hook-post-tool'
-        }
-      ]
-    },
-    {
-      matcher: 'Write',
-      hooks: [
-        {
-          type: 'command',
-          command: 'npm exec -- claude-hook-post-tool'
-        }
-      ]
-    }
-  ];
+    // 기존 항목 중 우리 훅이 아닌 것만 보존
+    const userEntries = existing.filter(entry => {
+      const cmds = entry.hooks || [];
+      return !cmds.some(h => h.command && h.command.includes(OUR_PREFIX));
+    });
 
-  // PreCompact Hook - 컨텍스트 압축 전 중요 정보 저장
-  hooks.PreCompact = [
-    {
-      hooks: [
-        {
-          type: 'command',
-          command: 'npm exec -- claude-hook-pre-compact'
-        }
-      ]
-    }
-  ];
+    // 사용자 훅 먼저, 우리 훅 뒤에 추가
+    hooks[event] = [...userEntries, ...ourEntries];
+  }
 
-  // Stop Hook - 세션 종료 시 자동 저장
-  hooks.Stop = [
-    {
-      hooks: [
-        {
-          type: 'command',
-          command: 'npm exec -- claude-hook-session-end'
-        }
-      ]
-    }
-  ];
+  mergeHooks('SessionStart', [
+    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-start' }] }
+  ]);
+
+  mergeHooks('UserPromptSubmit', [
+    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt' }] }
+  ]);
+
+  mergeHooks('PostToolUse', [
+    { matcher: 'Edit', hooks: [{ type: 'command', command: 'npm exec -- claude-hook-post-tool' }] },
+    { matcher: 'Write', hooks: [{ type: 'command', command: 'npm exec -- claude-hook-post-tool' }] }
+  ]);
+
+  mergeHooks('PreCompact', [
+    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-pre-compact' }] }
+  ]);
+
+  mergeHooks('Stop', [
+    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-end' }] }
+  ]);
 
   settings.hooks = hooks;
   saveSettings(settings);
@@ -264,13 +235,22 @@ function uninstall(): void {
 
   const settings = loadSettings();
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
+  const OUR_PREFIX = 'claude-hook-';
 
-  // session-continuity 관련 Hook만 제거
-  delete hooks.SessionStart;
-  delete hooks.UserPromptSubmit;
-  delete hooks.PostToolUse;
-  delete hooks.PreCompact;
-  delete hooks.Stop;
+  // 각 이벤트에서 우리 훅만 제거, 사용자 훅은 보존
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact', 'Stop']) {
+    const existing = (hooks[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
+    const remaining = existing.filter(entry => {
+      const cmds = entry.hooks || [];
+      return !cmds.some(h => h.command && h.command.includes(OUR_PREFIX));
+    });
+
+    if (remaining.length === 0) {
+      delete hooks[event];
+    } else {
+      hooks[event] = remaining;
+    }
+  }
 
   if (Object.keys(hooks).length === 0) {
     delete settings.hooks;
