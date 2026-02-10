@@ -19,10 +19,6 @@ function detectWorkspaceRoot(cwd: string): string {
   while (current !== root) {
     if (fs.existsSync(path.join(current, 'apps'))) return current;
     if (fs.existsSync(path.join(current, '.claude', 'sessions.db'))) return current;
-    if (fs.existsSync(path.join(current, 'package.json'))) {
-      // package.json이 있으면 여기가 프로젝트 루트일 가능성 높음
-      return current;
-    }
     current = path.dirname(current);
   }
 
@@ -38,9 +34,24 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
     return relative.split(path.sep)[0];
   }
 
-  // 단일 프로젝트 모드
-  if (!fs.existsSync(appsDir)) {
-    return path.basename(workspaceRoot);
+  // 워크스페이스 루트 자체에서 실행
+  if (cwd === workspaceRoot) {
+    return null;
+  }
+
+  // apps/ 외부 하위 프로젝트 (hackathons/ 등) - package.json에서 이름 추출
+  let current = cwd;
+  while (current !== workspaceRoot && current !== path.parse(current).root) {
+    const pkgPath = path.join(current, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        return pkg.name || path.basename(current);
+      } catch {
+        return path.basename(current);
+      }
+    }
+    current = path.dirname(current);
   }
 
   return null;

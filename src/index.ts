@@ -740,7 +740,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           const projectPath = getProjectPath(project);
           if (!await fileExists(projectPath)) {
             // DB에 컨텍스트가 있는지 확인 (디렉토리 없어도 컨텍스트는 있을 수 있음)
-            const hasContext = db.prepare('SELECT 1 FROM project_context WHERE project = ?').get(project);
+            const hasContext = db.prepare('SELECT 1 FROM project_context WHERE project = ?').get(project)
+              || db.prepare('SELECT 1 FROM active_context WHERE project = ?').get(project)
+              || db.prepare('SELECT 1 FROM sessions WHERE project = ? LIMIT 1').get(project);
             if (!hasContext) {
               return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
             }
@@ -939,7 +941,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         const projectPath = getProjectPath(project);
 
         if (!await fileExists(projectPath)) {
-          return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
+          const hasData = db.prepare('SELECT 1 FROM active_context WHERE project = ?').get(project)
+            || db.prepare('SELECT 1 FROM sessions WHERE project = ? LIMIT 1').get(project);
+          if (!hasData) {
+            return { content: [{ type: 'text', text: `Project not found: ${project}` }] };
+          }
         }
 
         // 태스크 통계

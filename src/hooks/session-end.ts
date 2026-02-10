@@ -7,7 +7,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import Database from 'better-sqlite3';
 
 interface SessionEndInput {
@@ -19,8 +18,22 @@ interface SessionEndInput {
   }>;
 }
 
-function getDbPath(): string {
-  const claudeDir = path.join(os.homedir(), '.claude');
+function detectWorkspaceRoot(cwd: string): string {
+  let current = cwd;
+  const root = path.parse(current).root;
+
+  while (current !== root) {
+    if (fs.existsSync(path.join(current, 'apps'))) return current;
+    if (fs.existsSync(path.join(current, '.claude', 'sessions.db'))) return current;
+    current = path.dirname(current);
+  }
+
+  return cwd;
+}
+
+function getDbPath(cwd: string): string {
+  const workspaceRoot = detectWorkspaceRoot(cwd);
+  const claudeDir = path.join(workspaceRoot, '.claude');
   if (!fs.existsSync(claudeDir)) {
     fs.mkdirSync(claudeDir, { recursive: true });
   }
@@ -126,7 +139,7 @@ async function main() {
     const input: SessionEndInput = inputData ? JSON.parse(inputData) : {};
     const cwd = input.cwd || process.cwd();
     const project = detectProject(cwd);
-    const dbPath = getDbPath();
+    const dbPath = getDbPath(cwd);
 
     if (!fs.existsSync(dbPath)) {
       console.log('[SessionEnd] No DB found, skipping');
