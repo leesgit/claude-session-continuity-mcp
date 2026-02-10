@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.6.2)
+# claude-session-continuity-mcp (v1.6.4)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
@@ -86,7 +86,7 @@ npm install claude-session-continuity-mcp
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-start" }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-user-prompt" }] }],
-    "PostToolUse": [{ "matcher": { "tool_name": "Edit|Write" }, "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-post-tool" }] }],
+    "PostToolUse": [{ "matcher": "Edit", "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-post-tool" }] }, { "matcher": "Write", "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-post-tool" }] }],
     "PreCompact": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-pre-compact" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-end" }] }]
   }
@@ -453,6 +453,8 @@ npm run test:coverage
 - [x] Solution semantic search (v1.6.0)
 - [x] Fix hooks settings file path (v1.6.1 - settings.json, not settings.local.json)
 - [x] Auto-migrate legacy hooks (v1.6.1)
+- [x] Fix PostToolUse matcher format to string (v1.6.3)
+- [x] Fix README documentation for new hook format (v1.6.4)
 - [ ] sqlite-vec native vector search (v2 - when data > 1000 records)
 - [ ] Web dashboard
 - [ ] Cloud sync option

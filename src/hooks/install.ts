@@ -182,9 +182,16 @@ function install(): void {
   // PostToolUse Hook - 파일 변경 시 자동 기록 (Edit, Write)
   hooks.PostToolUse = [
     {
-      matcher: {
-        tool_name: 'Edit|Write'
-      },
+      matcher: 'Edit',
+      hooks: [
+        {
+          type: 'command',
+          command: 'npm exec -- claude-hook-post-tool'
+        }
+      ]
+    },
+    {
+      matcher: 'Write',
       hooks: [
         {
           type: 'command',
