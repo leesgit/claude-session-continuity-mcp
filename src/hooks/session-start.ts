@@ -36,7 +36,21 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
 
   // 워크스페이스 루트 자체에서 실행
   if (cwd === workspaceRoot) {
-    return null;
+    // 모노레포(apps/ 있음)에서 루트 실행 → 프로젝트 없음
+    if (fs.existsSync(appsDir)) {
+      return null;
+    }
+    // 단일 프로젝트 모드 → package.json 이름 또는 폴더명
+    const pkgPath = path.join(workspaceRoot, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        return pkg.name || path.basename(workspaceRoot);
+      } catch {
+        return path.basename(workspaceRoot);
+      }
+    }
+    return path.basename(workspaceRoot);
   }
 
   // apps/ 외부 하위 프로젝트 (hackathons/ 등) - package.json에서 이름 추출

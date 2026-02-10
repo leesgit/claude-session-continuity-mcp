@@ -1,6 +1,6 @@
 {
   "name": "claude-session-continuity-mcp",
-  "version": "1.6.6",
+  "version": "1.6.7",
   "description": "Session Continuity for Claude Code - Never re-explain your project again",
   "type": "module",
   "main": "dist/index.js",
