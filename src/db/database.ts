@@ -252,6 +252,31 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_solutions_signature ON solutions(error_signature);
     CREATE INDEX IF NOT EXISTS idx_solutions_project ON solutions(project);
+
+    -- ===== 사용자 지시사항 테이블 =====
+    CREATE TABLE IF NOT EXISTS user_directives (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project TEXT NOT NULL,
+      directive TEXT NOT NULL,
+      context TEXT,
+      source TEXT DEFAULT 'explicit',
+      priority TEXT DEFAULT 'normal',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(project, directive)
+    );
+    CREATE INDEX IF NOT EXISTS idx_directives_project ON user_directives(project);
+
+    -- ===== 파일 접근 빈도 테이블 =====
+    CREATE TABLE IF NOT EXISTS hot_paths (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      access_count INTEGER DEFAULT 1,
+      last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
+      path_type TEXT DEFAULT 'file',
+      UNIQUE(project, file_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hot_paths_project ON hot_paths(project);
   `);
 }
 

@@ -108,14 +108,30 @@ async function main() {
 
     const input: ToolUseInput = inputData ? JSON.parse(inputData) : {};
 
-    // Edit, Write 도구만 처리
+    const TRACKED_TOOLS = ['Edit', 'Write', 'Read', 'Glob', 'Grep'];
+    const IGNORED_PATTERNS = ['node_modules', '.git/', 'dist/', 'build/', '.next/', 'coverage/', '.DS_Store'];
+
     const toolName = input.tool_name;
-    if (!toolName || !['Edit', 'Write'].includes(toolName)) {
+    if (!toolName || !TRACKED_TOOLS.includes(toolName)) {
       process.exit(0);
     }
 
-    const filePath = input.tool_input?.file_path;
+    // Read/Glob/Grep에서도 파일 경로 추출
+    let filePath = input.tool_input?.file_path;
+    if (!filePath && toolName === 'Glob') {
+      // Glob의 경우 path 파라미터 사용
+      filePath = (input.tool_input as Record<string, unknown>)?.path as string;
+    }
+    if (!filePath && toolName === 'Grep') {
+      filePath = (input.tool_input as Record<string, unknown>)?.path as string;
+    }
+
     if (!filePath) {
+      process.exit(0);
+    }
+
+    // 무시 패턴 체크
+    if (IGNORED_PATTERNS.some(p => filePath!.includes(p))) {
       process.exit(0);
     }
 
@@ -129,75 +145,82 @@ async function main() {
 
     const db = new Database(dbPath);
 
-    const { changeType, summary } = categorizeChange(
-      toolName,
-      filePath,
-      input.tool_input?.old_string,
-      input.tool_input?.new_string
-    );
-
-    // 최근 파일 목록 업데이트
-    const activeStmt = db.prepare(`
-      INSERT OR REPLACE INTO active_context (project, recent_files, updated_at)
-      VALUES (
-        ?,
-        COALESCE(
-          (SELECT json_insert(
-            COALESCE(recent_files, '[]'),
-            '$[#]',
-            ?
-          ) FROM active_context WHERE project = ?),
-          json_array(?)
-        ),
-        datetime('now')
-      )
-    `);
-
+    // hot_paths 추적 (모든 추적 도구)
     try {
-      // 간단한 방식으로 recent_files 업데이트
-      const existing = db.prepare('SELECT recent_files FROM active_context WHERE project = ?').get(project) as { recent_files: string } | undefined;
-
-      let recentFiles: string[] = [];
-      if (existing?.recent_files) {
-        try {
-          recentFiles = JSON.parse(existing.recent_files);
-        } catch {
-          recentFiles = [];
-        }
-      }
-
-      // 중복 제거하고 최신 파일 추가 (최대 10개)
-      recentFiles = recentFiles.filter(f => f !== filePath);
-      recentFiles.unshift(filePath);
-      recentFiles = recentFiles.slice(0, 10);
-
+      const pathType = filePath.includes('.') ? 'file' : 'directory';
       db.prepare(`
-        INSERT OR REPLACE INTO active_context (project, recent_files, updated_at)
-        VALUES (?, ?, datetime('now'))
-      `).run(project, JSON.stringify(recentFiles));
+        INSERT INTO hot_paths (project, file_path, access_count, last_accessed, path_type)
+        VALUES (?, ?, 1, datetime('now'), ?)
+        ON CONFLICT(project, file_path) DO UPDATE SET
+          access_count = access_count + 1,
+          last_accessed = datetime('now')
+      `).run(project, filePath, pathType);
 
+      // 7일 이상 된 경로의 access_count decay (반으로 줄임)
+      db.prepare(`
+        UPDATE hot_paths
+        SET access_count = MAX(1, access_count / 2)
+        WHERE project = ? AND last_accessed < datetime('now', '-7 days')
+      `).run(project);
     } catch {
-      // 오류 시 무시
+      // hot_paths 테이블 미존재 시 무시
     }
 
-    // 중요 변경사항은 메모리에 기록 (하루에 같은 파일 중복 방지)
-    const today = new Date().toISOString().slice(0, 10);
-    const existingMemory = db.prepare(`
-      SELECT id FROM memories
-      WHERE project = ?
-        AND content LIKE ?
-        AND date(created_at) = ?
-    `).get(project, `%${path.basename(filePath)}%`, today);
-
-    if (!existingMemory) {
-      db.prepare(`
-        INSERT INTO memories (content, memory_type, project, importance, tags)
-        VALUES (?, 'observation', ?, 3, ?)
-      `).run(
-        `[File Change] ${summary}`,
-        project,
-        `auto-tracked,${changeType},${getFileExtension(filePath)}`
+    // Edit, Write만 상세 추적 (기존 로직)
+    if (['Edit', 'Write'].includes(toolName)) {
+      const { changeType, summary } = categorizeChange(
+        toolName,
+        filePath,
+        input.tool_input?.old_string,
+        input.tool_input?.new_string
       );
+
+      try {
+        // 간단한 방식으로 recent_files 업데이트
+        const existing = db.prepare('SELECT recent_files FROM active_context WHERE project = ?').get(project) as { recent_files: string } | undefined;
+
+        let recentFiles: string[] = [];
+        if (existing?.recent_files) {
+          try {
+            recentFiles = JSON.parse(existing.recent_files);
+          } catch {
+            recentFiles = [];
+          }
+        }
+
+        // 중복 제거하고 최신 파일 추가 (최대 10개)
+        recentFiles = recentFiles.filter(f => f !== filePath);
+        recentFiles.unshift(filePath);
+        recentFiles = recentFiles.slice(0, 10);
+
+        db.prepare(`
+          INSERT OR REPLACE INTO active_context (project, recent_files, updated_at)
+          VALUES (?, ?, datetime('now'))
+        `).run(project, JSON.stringify(recentFiles));
+
+      } catch {
+        // 오류 시 무시
+      }
+
+      // 중요 변경사항은 메모리에 기록 (하루에 같은 파일 중복 방지)
+      const today = new Date().toISOString().slice(0, 10);
+      const existingMemory = db.prepare(`
+        SELECT id FROM memories
+        WHERE project = ?
+          AND content LIKE ?
+          AND date(created_at) = ?
+      `).get(project, `%${path.basename(filePath)}%`, today);
+
+      if (!existingMemory) {
+        db.prepare(`
+          INSERT INTO memories (content, memory_type, project, importance, tags)
+          VALUES (?, 'observation', ?, 3, ?)
+        `).run(
+          `[File Change] ${summary}`,
+          project,
+          `auto-tracked,${changeType},${getFileExtension(filePath)}`
+        );
+      }
     }
 
     db.close();

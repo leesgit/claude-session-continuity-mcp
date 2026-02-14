@@ -95,8 +95,16 @@ function loadContext(dbPath: string, project: string): string | null {
       lines.push('');
     }
 
-    // 마지막 세션
-    const last = db.prepare('SELECT last_work, next_tasks, timestamp FROM sessions WHERE project = ? ORDER BY timestamp DESC LIMIT 1').get(project) as { last_work: string; next_tasks: string; timestamp: string } | undefined;
+    // 마지막 세션 (빈 세션 skip)
+    const last = db.prepare(`
+      SELECT last_work, next_tasks, timestamp FROM sessions
+      WHERE project = ?
+        AND last_work != 'Session ended'
+        AND last_work != 'Session work completed'
+        AND last_work != 'Session started'
+        AND last_work != ''
+      ORDER BY timestamp DESC LIMIT 1
+    `).get(project) as { last_work: string; next_tasks: string; timestamp: string } | undefined;
     if (last?.last_work) {
       lines.push(`## Last Session (${last.timestamp?.slice(0, 10) || 'unknown'})`);
       lines.push(`**Work**: ${last.last_work}`);
@@ -106,6 +114,41 @@ function loadContext(dbPath: string, project: string): string | null {
       }
       lines.push('');
     }
+
+    // 사용자 지시사항
+    try {
+      const directives = db.prepare(`
+        SELECT directive, priority FROM user_directives
+        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
+      `).all(project) as Array<{ directive: string; priority: string }>;
+
+      if (directives.length > 0) {
+        lines.push('## 📌 Directives');
+        for (const d of directives) {
+          const icon = d.priority === 'high' ? '🔴' : '📎';
+          lines.push(`- ${icon} ${d.directive}`);
+        }
+        lines.push('');
+      }
+    } catch { /* table may not exist yet */ }
+
+    // Hot Files (최근 7일, 상위 10개)
+    try {
+      const hotPaths = db.prepare(`
+        SELECT file_path, access_count FROM hot_paths
+        WHERE project = ? AND last_accessed > datetime('now', '-7 days')
+        ORDER BY access_count DESC LIMIT 10
+      `).all(project) as Array<{ file_path: string; access_count: number }>;
+
+      if (hotPaths.length > 0) {
+        lines.push('## 🔥 Hot Files');
+        for (const h of hotPaths) {
+          const fileName = h.file_path.split('/').pop() || h.file_path;
+          lines.push(`- ${fileName} (${h.access_count}x)`);
+        }
+        lines.push('');
+      }
+    } catch { /* table may not exist yet */ }
 
     // 미완료 태스크
     const tasks = db.prepare(`

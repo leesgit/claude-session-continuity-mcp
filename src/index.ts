@@ -220,6 +220,31 @@ db.exec(`
     UNIQUE(entity_type, entity_id)
   );
   CREATE INDEX IF NOT EXISTS idx_embeddings_v4_entity ON embeddings_v4(entity_type, entity_id);
+
+  -- ===== v6: 사용자 지시사항 =====
+  CREATE TABLE IF NOT EXISTS user_directives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    directive TEXT NOT NULL,
+    context TEXT,
+    source TEXT DEFAULT 'explicit',
+    priority TEXT DEFAULT 'normal',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project, directive)
+  );
+  CREATE INDEX IF NOT EXISTS idx_directives_project ON user_directives(project);
+
+  -- ===== v6: 파일 접근 빈도 =====
+  CREATE TABLE IF NOT EXISTS hot_paths (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    access_count INTEGER DEFAULT 1,
+    last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
+    path_type TEXT DEFAULT 'file',
+    UNIQUE(project, file_path)
+  );
+  CREATE INDEX IF NOT EXISTS idx_hot_paths_project ON hot_paths(project);
 `);
 
 // ===== 임베딩 엔진 =====
@@ -755,8 +780,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         // 활성 컨텍스트
         const activeRow = db.prepare('SELECT * FROM active_context WHERE project = ?').get(project) as Record<string, unknown> | undefined;
 
-        // 최근 세션
-        const lastSession = db.prepare('SELECT * FROM sessions WHERE project = ? ORDER BY timestamp DESC LIMIT 1').get(project) as Record<string, unknown> | undefined;
+        // 최근 세션 (빈 세션 skip)
+        const lastSession = db.prepare(`
+          SELECT * FROM sessions
+          WHERE project = ?
+            AND last_work != 'Session ended'
+            AND last_work != 'Session work completed'
+            AND last_work != 'Session started'
+            AND last_work != ''
+          ORDER BY timestamp DESC LIMIT 1
+        `).get(project) as Record<string, unknown> | undefined;
 
         // 미완료 태스크
         const pendingTasks = db.prepare(`
@@ -764,6 +797,25 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           WHERE project = ? AND status IN ('pending', 'in_progress')
           ORDER BY priority DESC LIMIT 5
         `).all(project) as Array<{ id: number; title: string; status: string; priority: number }>;
+
+        // 사용자 지시사항
+        let directives: Array<{ directive: string; priority: string }> = [];
+        try {
+          directives = db.prepare(`
+            SELECT directive, priority FROM user_directives
+            WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
+          `).all(project) as Array<{ directive: string; priority: string }>;
+        } catch { /* table may not exist */ }
+
+        // Hot paths
+        let hotPaths: Array<{ file_path: string; access_count: number }> = [];
+        try {
+          hotPaths = db.prepare(`
+            SELECT file_path, access_count FROM hot_paths
+            WHERE project = ? AND last_accessed > datetime('now', '-7 days')
+            ORDER BY access_count DESC LIMIT 10
+          `).all(project) as Array<{ file_path: string; access_count: number }>;
+        } catch { /* table may not exist */ }
 
         if (compact) {
           const lines: string[] = [`# ${project} Context`];
@@ -787,6 +839,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
           if (activeRow?.blockers) {
             lines.push(`**Blocker**: ${activeRow.blockers}`);
+          }
+
+          if (directives.length > 0) {
+            lines.push(`**Directives**: ${directives.map(d => `${d.priority === 'high' ? '🔴' : '📎'} ${d.directive}`).join(' | ')}`);
+          }
+
+          if (hotPaths.length > 0) {
+            lines.push(`**Hot Files**: ${hotPaths.slice(0, 5).map(h => `${h.file_path.split('/').pop()}(${h.access_count}x)`).join(', ')}`);
           }
 
           return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -815,7 +875,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
                 nextSteps: lastSession.next_tasks ? JSON.parse(lastSession.next_tasks as string) : [],
                 timestamp: lastSession.timestamp
               } : null,
-              pendingTasks
+              pendingTasks,
+              directives: directives.length > 0 ? directives : undefined,
+              hotPaths: hotPaths.length > 0 ? hotPaths : undefined
             }, null, 2)
           }]
         };
@@ -823,21 +885,27 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
       case 'session_end': {
         const project = args.project as string;
-        const summary = args.summary as string;
-        const workDone = args.workDone as string | undefined;
-        const nextSteps = args.nextSteps as string[] | undefined;
-        const modifiedFiles = args.modifiedFiles as string[] | undefined;
+        // v1: summary, v2: currentState — 둘 다 호환
+        const summary = (args.summary || args.currentState || 'Session ended') as string;
+        const workDone = (args.workDone || args.currentState) as string | undefined;
+        const rawNextSteps = args.nextSteps;
+        const nextSteps: string[] | undefined = Array.isArray(rawNextSteps) ? rawNextSteps : undefined;
+        const rawModifiedFiles = args.modifiedFiles || args.recentFiles;
+        const modifiedFiles: string[] | undefined = Array.isArray(rawModifiedFiles) ? rawModifiedFiles : undefined;
         const blockers = args.blockers as string | undefined;
 
-        // 세션 저장 (기존 스키마 호환)
-        // last_work = summary, current_status = workDone, issues = blockers
+        if (!project) {
+          return { content: [{ type: 'text', text: 'Error: project is required' }] };
+        }
+
+        // 세션 저장
         db.prepare(`
           INSERT INTO sessions (project, last_work, current_status, next_tasks, modified_files, issues)
           VALUES (?, ?, ?, ?, ?, ?)
         `).run(
           project,
           summary,
-          workDone || null,
+          workDone || summary,
           nextSteps ? JSON.stringify(nextSteps) : null,
           modifiedFiles ? JSON.stringify(modifiedFiles) : null,
           blockers || null
@@ -854,7 +922,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           blockers || null
         );
 
-        return { content: [{ type: 'text', text: `✅ Session saved for ${project}` }] };
+        return { content: [{ type: 'text', text: `✅ Session saved for ${project}\nSummary: ${summary}\nWork: ${workDone || summary}\nFiles: ${modifiedFiles?.length || 0}\nBlockers: ${blockers || 'none'}` }] };
       }
 
       case 'session_history': {
@@ -1467,7 +1535,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         const content = args.content as string;
         const memoryType = args.type as string;
         const project = args.project as string | undefined;
-        const tags = args.tags as string[] | undefined;
+        const rawTags = args.tags;
+        const tags: string[] | undefined = Array.isArray(rawTags) ? rawTags : (typeof rawTags === 'string' ? rawTags.split(',').map((t: string) => t.trim()).filter(Boolean) : undefined);
         const importance = (args.importance as number) || 5;
         const relatedTo = args.relatedTo as number | undefined;
 
