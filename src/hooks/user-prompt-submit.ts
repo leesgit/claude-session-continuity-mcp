@@ -43,6 +43,61 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
   return null;
 }
 
+// ===== 사용자 지시사항 자동 추출 =====
+
+const DIRECTIVE_PATTERNS: Array<{ pattern: RegExp; priority: 'high' | 'normal' }> = [
+  { pattern: /(?:절대|never)\s+(.+)/i, priority: 'high' },
+  { pattern: /(?:항상|always)\s+(.+)/i, priority: 'high' },
+  { pattern: /(?:반드시|must)\s+(.+)/i, priority: 'high' },
+  { pattern: /never\s+(?:use|modify|touch)\s+(.+)/i, priority: 'high' },
+  { pattern: /always\s+(?:use|check|include)\s+(.+)/i, priority: 'high' },
+  { pattern: /#(?:기억|remember)\s+(.+)/i, priority: 'normal' },
+  { pattern: /(?:important|중요)[:\s]+(.+)/i, priority: 'normal' },
+  { pattern: /(?:rule|규칙)[:\s]+(.+)/i, priority: 'normal' },
+];
+
+const MAX_DIRECTIVES = 20;
+
+function extractAndSaveDirectives(dbPath: string, project: string, prompt: string): void {
+  try {
+    const db = new Database(dbPath);
+
+    for (const { pattern, priority } of DIRECTIVE_PATTERNS) {
+      const match = prompt.match(pattern);
+      if (match && match[1]) {
+        const directive = match[1].trim().slice(0, 200);
+        if (directive.length < 5) continue;
+
+        // UPSERT directive
+        db.prepare(`
+          INSERT INTO user_directives (project, directive, context, source, priority)
+          VALUES (?, ?, ?, 'explicit', ?)
+          ON CONFLICT(project, directive) DO UPDATE SET
+            priority = ?,
+            created_at = CURRENT_TIMESTAMP
+        `).run(project, directive, prompt.slice(0, 300), priority, priority);
+      }
+    }
+
+    // MAX_DIRECTIVES 초과 시 가장 오래된 normal 삭제
+    const count = (db.prepare('SELECT COUNT(*) as cnt FROM user_directives WHERE project = ?').get(project) as { cnt: number })?.cnt || 0;
+    if (count > MAX_DIRECTIVES) {
+      db.prepare(`
+        DELETE FROM user_directives WHERE id IN (
+          SELECT id FROM user_directives
+          WHERE project = ? AND priority = 'normal'
+          ORDER BY created_at ASC
+          LIMIT ?
+        )
+      `).run(project, count - MAX_DIRECTIVES);
+    }
+
+    db.close();
+  } catch {
+    // 테이블 미존재 등 무시
+  }
+}
+
 function loadContext(dbPath: string, project: string): string | null {
   if (!fs.existsSync(dbPath)) return null;
 
@@ -72,8 +127,16 @@ function loadContext(dbPath: string, project: string): string | null {
       lines.push('');
     }
 
-    // 마지막 세션
-    const last = db.prepare('SELECT last_work, next_tasks, timestamp FROM sessions WHERE project = ? ORDER BY timestamp DESC LIMIT 1').get(project) as { last_work: string; next_tasks: string; timestamp: string } | undefined;
+    // 마지막 세션 (빈 세션 skip)
+    const last = db.prepare(`
+      SELECT last_work, next_tasks, timestamp FROM sessions
+      WHERE project = ?
+        AND last_work != 'Session ended'
+        AND last_work != 'Session work completed'
+        AND last_work != 'Session started'
+        AND last_work != ''
+      ORDER BY timestamp DESC LIMIT 1
+    `).get(project) as { last_work: string; next_tasks: string; timestamp: string } | undefined;
     if (last?.last_work) {
       lines.push(`## Last Session (${last.timestamp?.slice(0, 10) || 'unknown'})`);
       lines.push(`**Work**: ${last.last_work}`);
@@ -83,6 +146,23 @@ function loadContext(dbPath: string, project: string): string | null {
       }
       lines.push('');
     }
+
+    // 사용자 지시사항
+    try {
+      const directives = db.prepare(`
+        SELECT directive, priority FROM user_directives
+        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
+      `).all(project) as Array<{ directive: string; priority: string }>;
+
+      if (directives.length > 0) {
+        lines.push('## 📌 Directives');
+        for (const d of directives) {
+          const icon = d.priority === 'high' ? '🔴' : '📎';
+          lines.push(`- ${icon} ${d.directive}`);
+        }
+        lines.push('');
+      }
+    } catch { /* table may not exist yet */ }
 
     // 미완료 태스크
     const tasks = db.prepare(`
@@ -183,6 +263,17 @@ async function main() {
     }
 
     const dbPath = path.join(workspaceRoot, '.claude', 'sessions.db');
+
+    // 사용자 프롬프트에서 지시사항 추출
+    if (inputData) {
+      try {
+        const parsed = JSON.parse(inputData) as PromptInput;
+        if (parsed.prompt) {
+          extractAndSaveDirectives(dbPath, project, parsed.prompt);
+        }
+      } catch { /* ignore */ }
+    }
+
     const context = loadContext(dbPath, project);
 
     if (context) {

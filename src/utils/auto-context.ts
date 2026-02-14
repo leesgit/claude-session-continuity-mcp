@@ -28,6 +28,14 @@ export interface ProjectContext {
     status: string;
     priority: number;
   }>;
+  directives: Array<{
+    directive: string;
+    priority: string;
+  }>;
+  hotPaths: Array<{
+    filePath: string;
+    accessCount: number;
+  }>;
 }
 
 export interface ContextSnapshot {
@@ -122,6 +130,25 @@ async function loadContextFromDB(project: string): Promise<ProjectContext> {
     priority: number;
   }>;
 
+  // Layer 4: 사용자 지시사항
+  let directives: Array<{ directive: string; priority: string }> = [];
+  try {
+    directives = db.prepare(`
+      SELECT directive, priority FROM user_directives
+      WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
+    `).all(project) as Array<{ directive: string; priority: string }>;
+  } catch { /* table may not exist yet */ }
+
+  // Layer 5: Hot paths (7일 이내, 상위 10개)
+  let hotPaths: Array<{ file_path: string; access_count: number }> = [];
+  try {
+    hotPaths = db.prepare(`
+      SELECT file_path, access_count FROM hot_paths
+      WHERE project = ? AND last_accessed > datetime('now', '-7 days')
+      ORDER BY access_count DESC LIMIT 10
+    `).all(project) as Array<{ file_path: string; access_count: number }>;
+  } catch { /* table may not exist yet */ }
+
   return {
     project,
     fixed: {
@@ -137,7 +164,9 @@ async function loadContextFromDB(project: string): Promise<ProjectContext> {
       lastVerification: activeContext?.last_verification || null,
       updatedAt: activeContext?.updated_at || null
     },
-    pendingTasks: tasks
+    pendingTasks: tasks,
+    directives,
+    hotPaths: hotPaths.map(h => ({ filePath: h.file_path, accessCount: h.access_count }))
   };
 }
 
@@ -344,6 +373,18 @@ export async function getCompactContext(project: string): Promise<string> {
   if (context.pendingTasks.length > 0) {
     const tasks = context.pendingTasks.map(t => `[P${t.priority}] ${t.title}`).join(' | ');
     lines.push(`**Tasks**: ${tasks}`);
+  }
+
+  // 사용자 지시사항
+  if (context.directives.length > 0) {
+    const dirs = context.directives.map(d => `${d.priority === 'high' ? '🔴' : '📎'} ${d.directive}`).join(' | ');
+    lines.push(`**Directives**: ${dirs}`);
+  }
+
+  // Hot files
+  if (context.hotPaths.length > 0) {
+    const files = context.hotPaths.slice(0, 5).map(h => `${h.filePath.split('/').pop()}(${h.accessCount}x)`).join(', ');
+    lines.push(`**Hot Files**: ${files}`);
   }
 
   return lines.join('\n');

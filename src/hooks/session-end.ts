@@ -148,10 +148,28 @@ async function main() {
 
     const db = new Database(dbPath);
 
+    // transcript 유효성 검사: assistant 메시지가 2개 미만이면 의미 없는 세션
+    if (input.transcript) {
+      const assistantCount = input.transcript.filter(m => m.role === 'assistant').length;
+      if (assistantCount < 2) {
+        console.log(`[SessionEnd] Skipping empty session for ${project} (${assistantCount} assistant messages)`);
+        db.close();
+        process.exit(0);
+      }
+    }
+
     // transcript에서 세션 요약 추출
     const summary = input.transcript
       ? extractSessionSummary(input.transcript)
       : { lastWork: 'Session ended', nextTasks: [], modifiedFiles: [] };
+
+    // 빈 세션 저장 방지: 의미 있는 작업이 없으면 skip
+    const emptyWorkPatterns = ['Session ended', 'Session work completed', 'Session started', ''];
+    if (emptyWorkPatterns.includes(summary.lastWork) && summary.modifiedFiles.length === 0) {
+      console.log(`[SessionEnd] Skipping empty session for ${project} (no meaningful work)`);
+      db.close();
+      process.exit(0);
+    }
 
     // 세션 기록 저장
     db.prepare(`
