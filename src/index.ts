@@ -893,9 +893,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         const rawModifiedFiles = args.modifiedFiles || args.recentFiles;
         const modifiedFiles: string[] | undefined = Array.isArray(rawModifiedFiles) ? rawModifiedFiles : undefined;
         const blockers = args.blockers as string | undefined;
+        const techStack = args.techStack as Record<string, string> | undefined;
 
         if (!project) {
           return { content: [{ type: 'text', text: 'Error: project is required' }] };
+        }
+
+        // 빈 세션 방지
+        const emptyPatterns = ['Session ended', 'Session work completed', 'Session started', ''];
+        if (emptyPatterns.includes(summary) && (!modifiedFiles || modifiedFiles.length === 0)) {
+          return { content: [{ type: 'text', text: `⏭️ Skipped empty session for ${project}` }] };
         }
 
         // 세션 저장
@@ -922,7 +929,20 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           blockers || null
         );
 
-        return { content: [{ type: 'text', text: `✅ Session saved for ${project}\nSummary: ${summary}\nWork: ${workDone || summary}\nFiles: ${modifiedFiles?.length || 0}\nBlockers: ${blockers || 'none'}` }] };
+        // techStack 저장 (있으면)
+        if (techStack && Object.keys(techStack).length > 0) {
+          const existing = db.prepare('SELECT tech_stack FROM project_context WHERE project = ?').get(project) as { tech_stack: string } | undefined;
+          let merged = existing?.tech_stack ? JSON.parse(existing.tech_stack) : {};
+          merged = { ...merged, ...techStack };
+          const json = JSON.stringify(merged);
+          db.prepare(`
+            INSERT INTO project_context (project, tech_stack, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(project) DO UPDATE SET tech_stack = ?, updated_at = CURRENT_TIMESTAMP
+          `).run(project, json, json);
+        }
+
+        return { content: [{ type: 'text', text: `✅ Session saved for ${project}\nSummary: ${summary}\nWork: ${workDone || summary}\nFiles: ${modifiedFiles?.length || 0}\nBlockers: ${blockers || 'none'}${techStack ? '\nTech stack updated' : ''}` }] };
       }
 
       case 'session_history': {
