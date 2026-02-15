@@ -43,6 +43,142 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
   return null;
 }
 
+// ===== 과거 참조 자동 감지 =====
+
+const PAST_REFERENCE_PATTERNS: RegExp[] = [
+  // 한국어
+  /(?:저번에|전에|이전에|그때|지난번에|예전에|아까)\s+(.+?)(?:\s*(?:어떻게|뭐|무엇|왜|어디|언제))/,
+  /(?:했던|했었던|만들었던|수정했던|구현했던|해결했던)\s*(.+)/,
+  /(?:지난|이전|전)\s*(?:세션|작업|시간|번).*?(?:에서|때)\s*(.+)/,
+  // 영어
+  /(?:last time|before|previously|earlier)\s+(?:.*?)\s*((?:how|what|why|where|when).*)/i,
+  /(?:did we|did I|have we|have I)\s+(.+)\s+(?:before|last time|earlier)/i,
+  /(?:remember when|recall when)\s+(.+)/i,
+];
+
+function extractPastKeywords(prompt: string): string | null {
+  for (const pattern of PAST_REFERENCE_PATTERNS) {
+    const match = prompt.match(pattern);
+    if (match?.[1]) {
+      // 추출된 키워드에서 조사/의문사 제거, 핵심 단어만
+      return match[1].trim().replace(/[?？\s]+$/g, '').slice(0, 50);
+    }
+  }
+  return null;
+}
+
+interface PastWorkResult {
+  sessions: Array<{ date: string; work: string }>;
+  memories: Array<{ type: string; content: string }>;
+  solutions: Array<{ signature: string; solution: string }>;
+}
+
+function searchPastWork(db: Database.Database, keyword: string): PastWorkResult {
+  const result: PastWorkResult = { sessions: [], memories: [], solutions: [] };
+  const likeKeyword = `%${keyword}%`;
+
+  // 1. sessions 검색 (최근 30일, 상위 3건)
+  try {
+    const sessions = db.prepare(`
+      SELECT last_work, timestamp FROM sessions
+      WHERE last_work LIKE ?
+        AND last_work != 'Session ended'
+        AND last_work != 'Session work completed'
+        AND last_work != 'Session started'
+        AND last_work != ''
+        AND timestamp > datetime('now', '-30 days')
+      ORDER BY timestamp DESC LIMIT 3
+    `).all(likeKeyword) as Array<{ last_work: string; timestamp: string }>;
+
+    for (const s of sessions) {
+      const work = s.last_work.length > 80 ? s.last_work.slice(0, 80) + '...' : s.last_work;
+      result.sessions.push({ date: s.timestamp?.slice(0, 10) || 'unknown', work });
+    }
+  } catch { /* ignore */ }
+
+  // 2. memories FTS5 검색 (상위 2건)
+  try {
+    const memories = db.prepare(`
+      SELECT m.content, m.memory_type FROM memories m
+      JOIN memories_fts fts ON m.id = fts.rowid
+      WHERE memories_fts MATCH ?
+      ORDER BY rank LIMIT 2
+    `).all(keyword) as Array<{ content: string; memory_type: string }>;
+
+    for (const m of memories) {
+      const content = m.content.length > 80 ? m.content.slice(0, 80) + '...' : m.content;
+      result.memories.push({ type: m.memory_type, content });
+    }
+  } catch {
+    // FTS5 매칭 실패 시 LIKE 폴백
+    try {
+      const memories = db.prepare(`
+        SELECT content, memory_type FROM memories
+        WHERE content LIKE ?
+        ORDER BY importance DESC, created_at DESC LIMIT 2
+      `).all(likeKeyword) as Array<{ content: string; memory_type: string }>;
+
+      for (const m of memories) {
+        const content = m.content.length > 80 ? m.content.slice(0, 80) + '...' : m.content;
+        result.memories.push({ type: m.memory_type, content });
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 3. solutions 검색 (상위 2건)
+  try {
+    const solutions = db.prepare(`
+      SELECT error_signature, solution FROM solutions
+      WHERE error_signature LIKE ? OR solution LIKE ?
+      ORDER BY created_at DESC LIMIT 2
+    `).all(likeKeyword, likeKeyword) as Array<{ error_signature: string; solution: string }>;
+
+    for (const s of solutions) {
+      const sol = s.solution.length > 80 ? s.solution.slice(0, 80) + '...' : s.solution;
+      result.solutions.push({ signature: s.error_signature, solution: sol });
+    }
+  } catch { /* ignore */ }
+
+  return result;
+}
+
+function formatPastWork(pastWork: PastWorkResult): string | null {
+  const { sessions, memories, solutions } = pastWork;
+  if (sessions.length === 0 && memories.length === 0 && solutions.length === 0) return null;
+
+  const lines: string[] = ['## Related Past Work (auto-detected from your question)\n'];
+
+  if (sessions.length > 0) {
+    lines.push('### Sessions');
+    for (const s of sessions) {
+      lines.push(`- [${s.date}] ${s.work}`);
+    }
+    lines.push('');
+  }
+
+  if (memories.length > 0) {
+    const typeIcons: Record<string, string> = {
+      observation: '👀', decision: '🎯', learning: '📚', error: '⚠️', pattern: '🔄'
+    };
+    lines.push('### Memories');
+    for (const m of memories) {
+      const icon = typeIcons[m.type] || '💭';
+      lines.push(`- ${icon} [${m.type}] ${m.content}`);
+    }
+    lines.push('');
+  }
+
+  if (solutions.length > 0) {
+    lines.push('### Solutions');
+    for (const s of solutions) {
+      lines.push(`- **${s.signature}**: ${s.solution}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 // ===== 사용자 지시사항 자동 추출 =====
 
 const DIRECTIVE_PATTERNS: Array<{ pattern: RegExp; priority: 'high' | 'normal' }> = [
@@ -98,7 +234,7 @@ function extractAndSaveDirectives(dbPath: string, project: string, prompt: strin
   }
 }
 
-function loadContext(dbPath: string, project: string): string | null {
+function loadContext(dbPath: string, project: string, prompt?: string): string | null {
   if (!fs.existsSync(dbPath)) return null;
 
   try {
@@ -201,19 +337,31 @@ function loadContext(dbPath: string, project: string): string | null {
     }
 
     // 최근 에러 솔루션
-    const solutions = db.prepare(`
+    const recentSolutions = db.prepare(`
       SELECT error_signature, solution FROM solutions
       WHERE project = ?
       ORDER BY created_at DESC LIMIT 3
     `).all(project) as Array<{ error_signature: string; solution: string }>;
 
-    if (solutions.length > 0) {
+    if (recentSolutions.length > 0) {
       lines.push('## 🔧 Recent Error Solutions');
-      for (const s of solutions) {
+      for (const s of recentSolutions) {
         const sol = s.solution.length > 80 ? s.solution.slice(0, 80) + '...' : s.solution;
         lines.push(`- **${s.error_signature}**: ${sol}`);
       }
       lines.push('');
+    }
+
+    // 과거 참조 자동 검색 (프롬프트에서 과거 참조 패턴 감지 시)
+    if (prompt) {
+      const keyword = extractPastKeywords(prompt);
+      if (keyword) {
+        const pastWork = searchPastWork(db, keyword);
+        const pastSection = formatPastWork(pastWork);
+        if (pastSection) {
+          lines.push(pastSection);
+        }
+      }
     }
 
     db.close();
@@ -265,16 +413,18 @@ async function main() {
     const dbPath = path.join(workspaceRoot, '.claude', 'sessions.db');
 
     // 사용자 프롬프트에서 지시사항 추출
+    let userPrompt: string | undefined;
     if (inputData) {
       try {
         const parsed = JSON.parse(inputData) as PromptInput;
         if (parsed.prompt) {
+          userPrompt = parsed.prompt;
           extractAndSaveDirectives(dbPath, project, parsed.prompt);
         }
       } catch { /* ignore */ }
     }
 
-    const context = loadContext(dbPath, project);
+    const context = loadContext(dbPath, project, userPrompt);
 
     if (context) {
       console.log(`\n<project-context project="${project}">\n${context}\n</project-context>\n`);

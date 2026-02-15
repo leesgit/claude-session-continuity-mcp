@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.6.4)
+# claude-session-continuity-mcp (v1.8.0)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
 
@@ -100,7 +100,7 @@ npm install claude-session-continuity-mcp
 | Hook | Command | Function |
 |------|---------|----------|
 | `SessionStart` | `claude-hook-session-start` | Auto-loads project context on session start |
-| `UserPromptSubmit` | `claude-hook-user-prompt` | Auto-injects relevant memories per prompt |
+| `UserPromptSubmit` | `claude-hook-user-prompt` | Auto-injects relevant memories + past reference search |
 | `PostToolUse` | `claude-hook-post-tool` | Tracks file changes (Edit, Write) automatically |
 | `PreCompact` | `claude-hook-pre-compact` | Saves important context before compression |
 | `Stop` | `claude-hook-session-end` | Auto-saves session on exit (no manual call needed) |
@@ -142,6 +142,8 @@ After installation, restart Claude Code to activate the hooks.
 | 💾 **Auto Backup** | **(v1.5.0)** Daily SQLite backup (max 5) |
 | 🛡️ **PreCompact Save** | **(v1.5.0)** Save context before compression |
 | 🚪 **Auto Session End** | **(v1.5.0)** No manual session_end needed |
+| 🔍 **Past Reference Detection** | **(v1.8.0)** "저번에 X 어떻게 했어?" auto-searches DB |
+| 📝 **User Directive Extraction** | **(v1.8.0)** Auto-extracts "always/never" rules from prompts |
 
 ---
 
@@ -193,6 +195,42 @@ npx claude-session-hooks uninstall
 
 # Temporarily disable
 export MCP_HOOKS_DISABLED=true
+```
+
+### Past Reference Detection (v1.8.0)
+
+When you ask about past work, the `UserPromptSubmit` hook automatically searches the database:
+
+```
+You: "저번에 인앱결제 어떻게 했어?"
+→ Hook detects "저번에" + extracts keyword "인앱결제"
+→ Searches sessions, memories (FTS5), and solutions
+→ Injects matching results into context automatically
+```
+
+**Supported patterns (Korean & English):**
+
+| Pattern | Example |
+|---------|---------|
+| 저번에/전에/이전에 ... 어떻게 | "저번에 CORS 에러 어떻게 해결했지?" |
+| ~했던/만들었던/해결했던 | "수정했던 로그인 로직" |
+| 지난 세션/작업에서 | "지난 세션에서 결제 구현" |
+| last time/before/previously | "How did we handle auth last time?" |
+| did we/did I ... before | "Did we fix the database migration before?" |
+| remember when/recall when | "Remember when we set up CI?" |
+
+**Output example:**
+```markdown
+## Related Past Work (auto-detected from your question)
+
+### Sessions
+- [2/14] 카카오 로그인 앱키 수정, 인앱결제 IAP 플로우 수정
+
+### Memories
+- 🎯 [decision] 테스트: 인앱결제 상품 등록 완료
+
+### Solutions
+- **IAP_BILLING_ERROR**: StoreKit 2 migration으로 해결
 ```
 
 ### Why npm exec? (v1.4.3+)
@@ -455,6 +493,9 @@ npm run test:coverage
 - [x] Auto-migrate legacy hooks (v1.6.1)
 - [x] Fix PostToolUse matcher format to string (v1.6.3)
 - [x] Fix README documentation for new hook format (v1.6.4)
+- [x] Empty session skip and techStack save improvements (v1.7.1)
+- [x] Past reference auto-detection in UserPromptSubmit hook (v1.8.0)
+- [x] User directive extraction ("always/never" rules) (v1.8.0)
 - [ ] sqlite-vec native vector search (v2 - when data > 1000 records)
 - [ ] Web dashboard
 - [ ] Cloud sync option
