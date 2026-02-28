@@ -208,16 +208,14 @@ async function readRecentAssistantMessages(transcriptPath: string, maxMessages =
 
 /**
  * 다음 할 일 추출 (텍스트에서)
- * 테이블 행, 코드블록 내부는 제외
  */
 function extractNextTasks(content: string): string[] {
   const nextTasks: string[] = [];
 
-  // 코드블록과 테이블 행 제거
   const cleaned = content
-    .replace(/```[\s\S]*?```/g, '')              // 코드블록 제거
+    .replace(/```[\s\S]*?```/g, '')
     .split('\n')
-    .filter(line => !line.trim().startsWith('|')) // 테이블 행 제거
+    .filter(line => !line.trim().startsWith('|'))
     .join('\n');
 
   const nextPatterns = [
@@ -235,6 +233,151 @@ function extractNextTasks(content: string): string[] {
   }
 
   return nextTasks;
+}
+
+/**
+ * JSONL transcript에서 git commit 메시지 추출
+ */
+async function extractCommitMessages(transcriptPath: string): Promise<string[]> {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return [];
+  const commits: string[] = [];
+
+  try {
+    const fileStream = fs.createReadStream(transcriptPath, { encoding: 'utf-8' });
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        const content = line;
+        // git commit -m "message" 또는 heredoc 패턴
+        const commitPatterns = [
+          /git commit.*?-m\s*["']([^"']{10,150})["']/,
+          /git commit.*?-m\s*"\$\(cat <<'?EOF'?\n([\s\S]{10,150}?)(?:\n\s*Co-Authored|\nEOF)/,
+        ];
+        for (const pattern of commitPatterns) {
+          const match = content.match(pattern);
+          if (match?.[1]) {
+            const msg = match[1].trim().split('\n')[0]; // 첫 줄만
+            if (msg.length > 10 && !msg.startsWith('Co-Authored')) {
+              commits.push(msg.slice(0, 150));
+            }
+          }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* file read error */ }
+
+  return [...new Set(commits)].slice(0, 5);
+}
+
+/**
+ * JSONL transcript에서 에러→해결 쌍 추출
+ */
+async function extractErrorFixPairs(transcriptPath: string): Promise<string[]> {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return [];
+  const pairs: string[] = [];
+  const entries: Array<{ role: string; text: string }> = [];
+
+  try {
+    const fileStream = fs.createReadStream(transcriptPath, { encoding: 'utf-8' });
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        const role = entry.type || entry.role || '';
+        let text = '';
+        if (typeof entry.message?.content === 'string') {
+          text = entry.message.content;
+        } else if (Array.isArray(entry.message?.content)) {
+          text = entry.message.content
+            .filter((b: { type: string }) => b.type === 'text')
+            .map((b: { text: string }) => b.text)
+            .join('\n');
+        }
+        if (text.length > 5) entries.push({ role, text: text.slice(0, 500) });
+      } catch { /* skip */ }
+    }
+  } catch { /* file error */ }
+
+  const recent = entries.slice(-30);
+  const errorRe = /(?:error|Error|ERROR|오류|실패|FAILED|Exception)[:\s](.{5,80})/;
+  const fixRe = /(?:fixed|resolved|수정|해결|Added|수정 완료)/i;
+
+  for (let i = 0; i < recent.length - 1; i++) {
+    const errorMatch = recent[i].text.match(errorRe);
+    if (errorMatch) {
+      for (let j = i + 1; j < Math.min(i + 4, recent.length); j++) {
+        if (recent[j].role === 'assistant' && fixRe.test(recent[j].text)) {
+          const errorStr = stripMarkdown(errorMatch[0]).slice(0, 80);
+          const fixLine = recent[j].text.split('\n')
+            .find(l => fixRe.test(l));
+          const fixStr = fixLine ? stripMarkdown(fixLine).slice(0, 80) : 'resolved';
+          pairs.push(`${errorStr} → ${fixStr}`);
+          break;
+        }
+      }
+    }
+  }
+
+  return [...new Set(pairs)].slice(0, 3);
+}
+
+/**
+ * JSONL transcript에서 결정 사항 추출
+ */
+async function extractDecisions(transcriptPath: string): Promise<string[]> {
+  const messages = await readRecentAssistantMessages(transcriptPath, 10);
+  const decisions: string[] = [];
+
+  const decisionPatterns = [
+    /(?:chose|using|switched to|went with)\s+(.{10,80})\s+(?:because|since|instead of|over)/gi,
+    /(?:instead of|rather than)\s+(.{10,60})/gi,
+    /(.{10,60})(?:으로|로)\s+(?:결정|변경|전환)(?:했|함|합니다)/g,
+    /(.{10,60})(?:대신|말고)\s+(.{10,60})(?:사용|적용)/g,
+  ];
+
+  for (const msg of messages) {
+    for (const pattern of decisionPatterns) {
+      pattern.lastIndex = 0;
+      const matches = msg.match(pattern);
+      if (matches) {
+        decisions.push(...matches.slice(0, 1).map(m => stripMarkdown(m).slice(0, 150)));
+      }
+    }
+  }
+
+  return [...new Set(decisions)].slice(0, 3);
+}
+
+/**
+ * 최근 assistant 메시지에서 액션 동사 포함 라인 추출 (lastWork 폴백)
+ */
+async function extractWorkFromRecentMessages(transcriptPath: string): Promise<string> {
+  const messages = await readRecentAssistantMessages(transcriptPath, 5);
+
+  const actionVerbs = /(?:created|modified|added|removed|fixed|updated|implemented|deployed|configured|refactored|만들|수정|추가|삭제|구현|배포|설정|완료)/i;
+  const filePath = /(?:\/[\w.-]+){2,}|[\w.-]+\.\w{1,4}/;
+
+  for (const msg of messages.reverse()) {
+    const lines = msg.split('\n').filter(l => !isNoiseLine(l));
+    for (const line of lines) {
+      if (actionVerbs.test(line) && line.length > 20) {
+        const cleaned = stripMarkdown(line).trim();
+        if (cleaned.length > 15) return cleaned.slice(0, 200);
+      }
+    }
+    // 파일 경로 포함 라인도 시도
+    for (const line of lines) {
+      if (filePath.test(line) && actionVerbs.test(line)) {
+        return stripMarkdown(line).trim().slice(0, 200);
+      }
+    }
+  }
+
+  return '';
 }
 
 async function main() {
@@ -263,30 +406,53 @@ async function main() {
 
     const db = new Database(dbPath);
 
-    // === last_work 추출 ===
+    // === 추출 시작 ===
     let lastWork = '';
     let nextTasks: string[] = [];
+    let commitMessages: string[] = [];
+    let errorsSolved: string[] = [];
+    let decisions: string[] = [];
 
-    // 소스 1: last_assistant_message (Stop 이벤트에서 직접 제공)
-    if (input.last_assistant_message) {
+    // Phase 1: transcript_path에서 고품질 데이터 추출
+    if (input.transcript_path) {
+      // git commit 메시지 추출 (가장 고품질 요약)
+      commitMessages = await extractCommitMessages(input.transcript_path);
+      // 에러→해결 쌍 추출
+      errorsSolved = await extractErrorFixPairs(input.transcript_path);
+      // 결정 사항 추출
+      decisions = await extractDecisions(input.transcript_path);
+    }
+
+    // Phase 2: lastWork 결정 (우선순위 폴백)
+    // 2a: 커밋 메시지 기반 (가장 신뢰도 높음)
+    if (commitMessages.length > 0) {
+      lastWork = commitMessages.slice(0, 3).join('; ');
+    }
+
+    // 2b: last_assistant_message에서 추출
+    if (!lastWork && input.last_assistant_message) {
       lastWork = extractSummaryFromText(input.last_assistant_message);
       nextTasks = extractNextTasks(input.last_assistant_message);
     }
 
-    // 소스 2: transcript_path에서 마지막 assistant 메시지들 읽기 (소스 1 실패 시)
+    // 2c: transcript에서 최근 assistant 메시지 스캔
     if (!lastWork && input.transcript_path) {
       const recentMessages = await readRecentAssistantMessages(input.transcript_path);
       for (let i = recentMessages.length - 1; i >= 0; i--) {
         lastWork = extractSummaryFromText(recentMessages[i]);
         if (lastWork) break;
       }
-      // next tasks도 마지막 메시지에서 추출
-      if (recentMessages.length > 0) {
+      if (recentMessages.length > 0 && nextTasks.length === 0) {
         nextTasks = extractNextTasks(recentMessages[recentMessages.length - 1]);
       }
     }
 
-    // 소스 3: 레거시 transcript 배열 (이전 버전 호환)
+    // 2d: 액션 동사 기반 폴백
+    if (!lastWork && input.transcript_path) {
+      lastWork = await extractWorkFromRecentMessages(input.transcript_path);
+    }
+
+    // 2e: 레거시 transcript 배열
     if (!lastWork && input.transcript) {
       const assistantMsgs = input.transcript.filter(m => m.role === 'assistant');
       if (assistantMsgs.length < 2) {
@@ -300,7 +466,7 @@ async function main() {
       }
     }
 
-    // === modified_files: active_context에서 PostToolUse가 실시간 저장한 파일 목록 ===
+    // === modified_files ===
     let modifiedFiles: string[] = [];
     try {
       const activeCtx = db.prepare('SELECT recent_files FROM active_context WHERE project = ?').get(project) as { recent_files: string } | undefined;
@@ -309,7 +475,7 @@ async function main() {
       }
     } catch { /* active_context may not exist */ }
 
-    // last_work 폴백: 파일 목록 기반
+    // last_work 최종 폴백: 파일 목록 기반
     if (!lastWork && modifiedFiles.length > 0) {
       const fileNames = modifiedFiles.slice(0, 5).map(f => path.basename(f)).join(', ');
       lastWork = `Modified files: ${fileNames}`;
@@ -322,7 +488,7 @@ async function main() {
       process.exit(0);
     }
 
-    // 중복 저장 방지: 최근 60초 이내 동일 last_work
+    // 중복 저장 방지
     const recentDup = db.prepare(`
       SELECT id FROM sessions
       WHERE project = ? AND last_work = ? AND timestamp > datetime('now', '-60 seconds')
@@ -334,15 +500,24 @@ async function main() {
       process.exit(0);
     }
 
+    // 구조화 메타데이터 (issues 컬럼 활용)
+    const metadata = {
+      commits: commitMessages,
+      decisions,
+      errorsSolved
+    };
+    const hasMetadata = commitMessages.length > 0 || decisions.length > 0 || errorsSolved.length > 0;
+
     // 세션 기록 저장
     db.prepare(`
-      INSERT INTO sessions (project, last_work, next_tasks, modified_files)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO sessions (project, last_work, next_tasks, modified_files, issues)
+      VALUES (?, ?, ?, ?, ?)
     `).run(
       project,
       lastWork,
       JSON.stringify([...new Set(nextTasks)].slice(0, 5)),
-      JSON.stringify(modifiedFiles.slice(0, 15))
+      JSON.stringify(modifiedFiles.slice(0, 15)),
+      hasMetadata ? JSON.stringify(metadata) : null
     );
 
     // 활성 컨텍스트 업데이트
@@ -359,6 +534,7 @@ async function main() {
 
     console.log(`[SessionEnd] Saved session for ${project}`);
     console.log(`  Last work: ${lastWork.slice(0, 80)}`);
+    console.log(`  Commits: ${commitMessages.length}, Decisions: ${decisions.length}, Errors: ${errorsSolved.length}`);
     console.log(`  Modified files: ${modifiedFiles.length}`);
     console.log(`  Next tasks: ${nextTasks.length}`);
 

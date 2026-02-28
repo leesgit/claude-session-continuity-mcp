@@ -55,46 +55,83 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
   return path.basename(workspaceRoot);
 }
 
+function cleanupNoiseMemories(db: InstanceType<typeof Database>): void {
+  try {
+    // 3일+ auto-tracked 관찰 메모리 삭제
+    db.prepare(`
+      DELETE FROM memories
+      WHERE memory_type = 'observation'
+        AND tags LIKE '%auto-tracked%'
+        AND created_at < datetime('now', '-3 days')
+    `).run();
+
+    // 14일+ auto-compact 패턴 메모리 삭제
+    db.prepare(`
+      DELETE FROM memories
+      WHERE tags LIKE '%auto-compact%'
+        AND created_at < datetime('now', '-14 days')
+    `).run();
+  } catch { /* ignore */ }
+}
+
 function loadContext(dbPath: string, project: string): string | null {
   if (!fs.existsSync(dbPath)) return null;
 
   try {
-    const db = new Database(dbPath, { readonly: true });
+    const db = new Database(dbPath);
+
+    // 노이즈 메모리 자동 정리
+    cleanupNoiseMemories(db);
 
     const lines: string[] = [`# ${project} - Session Resumed\n`];
-
-    // 기술 스택
-    const fixed = db.prepare('SELECT tech_stack FROM project_context WHERE project = ?').get(project) as { tech_stack: string } | undefined;
-    if (fixed?.tech_stack) {
-      const stack = JSON.parse(fixed.tech_stack);
-      const stackStr = Object.entries(stack).map(([k, v]) => `**${k}**: ${v}`).join(', ');
-      lines.push(`## Tech Stack\n${stackStr}\n`);
-    }
 
     // 현재 상태
     const active = db.prepare('SELECT current_state, blockers FROM active_context WHERE project = ?').get(project) as { current_state: string; blockers: string } | undefined;
     if (active?.current_state) {
-      lines.push(`## Current State\n📍 ${active.current_state}`);
+      lines.push(`📍 **State**: ${active.current_state}`);
       if (active.blockers) lines.push(`🚧 **Blocker**: ${active.blockers}`);
       lines.push('');
     }
 
-    // 마지막 세션 (빈 세션 skip)
-    const last = db.prepare(`
-      SELECT last_work, next_tasks, timestamp FROM sessions
+    // 최근 3개 세션 (빈 세션 skip)
+    const recentSessions = db.prepare(`
+      SELECT last_work, next_tasks, issues, timestamp FROM sessions
       WHERE project = ?
         AND last_work != 'Session ended'
         AND last_work != 'Session work completed'
         AND last_work != 'Session started'
         AND last_work != ''
-      ORDER BY timestamp DESC LIMIT 1
-    `).get(project) as { last_work: string; next_tasks: string; timestamp: string } | undefined;
-    if (last?.last_work) {
-      lines.push(`## Last Session (${last.timestamp?.slice(0, 10) || 'unknown'})`);
-      lines.push(`**Work**: ${last.last_work}`);
-      if (last.next_tasks) {
-        const next = JSON.parse(last.next_tasks);
-        if (next.length > 0) lines.push(`**Next**: ${next.slice(0, 3).join(' → ')}`);
+        AND length(last_work) > 15
+      ORDER BY timestamp DESC LIMIT 3
+    `).all(project) as Array<{
+      last_work: string; next_tasks: string; issues: string; timestamp: string
+    }>;
+
+    if (recentSessions.length > 0) {
+      lines.push('## Recent Sessions');
+      for (const session of recentSessions) {
+        lines.push(`### ${session.timestamp?.slice(0, 10) || 'unknown'}`);
+        lines.push(`**Work**: ${session.last_work}`);
+
+        // 구조화 메타데이터 파싱 (session-end v2에서 저장)
+        if (session.issues) {
+          try {
+            const meta = JSON.parse(session.issues);
+            if (meta.commits?.length > 0) {
+              lines.push(`**Commits**: ${meta.commits.slice(0, 3).join('; ')}`);
+            }
+            if (meta.decisions?.length > 0) {
+              lines.push(`**Decisions**: ${meta.decisions.join('; ')}`);
+            }
+          } catch { /* plain text issues or empty, skip */ }
+        }
+
+        if (session.next_tasks) {
+          try {
+            const next = JSON.parse(session.next_tasks);
+            if (next.length > 0) lines.push(`**Next**: ${next.slice(0, 2).join(', ')}`);
+          } catch { /* skip */ }
+        }
       }
       lines.push('');
     }
@@ -107,7 +144,7 @@ function loadContext(dbPath: string, project: string): string | null {
       `).all(project) as Array<{ directive: string; priority: string }>;
 
       if (directives.length > 0) {
-        lines.push('## 📌 Directives');
+        lines.push('## Directives');
         for (const d of directives) {
           const icon = d.priority === 'high' ? '🔴' : '📎';
           lines.push(`- ${icon} ${d.directive}`);
@@ -116,64 +153,54 @@ function loadContext(dbPath: string, project: string): string | null {
       }
     } catch { /* table may not exist yet */ }
 
-    // Hot Files (최근 7일, 상위 10개)
+    // 미완료 태스크
     try {
-      const hotPaths = db.prepare(`
-        SELECT file_path, access_count FROM hot_paths
-        WHERE project = ? AND last_accessed > datetime('now', '-7 days')
-        ORDER BY access_count DESC LIMIT 10
-      `).all(project) as Array<{ file_path: string; access_count: number }>;
+      const tasks = db.prepare(`
+        SELECT title, priority, status FROM tasks
+        WHERE project = ? AND status IN ('pending', 'in_progress')
+        ORDER BY priority DESC LIMIT 5
+      `).all(project) as Array<{ title: string; priority: number; status: string }>;
 
-      if (hotPaths.length > 0) {
-        lines.push('## 🔥 Hot Files');
-        for (const h of hotPaths) {
-          const fileName = h.file_path.split('/').pop() || h.file_path;
-          lines.push(`- ${fileName} (${h.access_count}x)`);
+      if (tasks.length > 0) {
+        lines.push('## Pending Tasks');
+        for (const t of tasks) {
+          const icon = t.status === 'in_progress' ? '🔄' : '⏳';
+          lines.push(`- ${icon} [P${t.priority}] ${t.title}`);
         }
         lines.push('');
       }
-    } catch { /* table may not exist yet */ }
+    } catch { /* table may not exist */ }
 
-    // 미완료 태스크
-    const tasks = db.prepare(`
-      SELECT title, priority, status FROM tasks
-      WHERE project = ? AND status IN ('pending', 'in_progress')
-      ORDER BY priority DESC LIMIT 5
-    `).all(project) as Array<{ title: string; priority: number; status: string }>;
+    // 중요 메모리 (노이즈 필터링)
+    try {
+      const memories = db.prepare(`
+        SELECT content, memory_type FROM memories
+        WHERE project = ?
+          AND memory_type IN ('decision', 'learning', 'error', 'preference')
+          AND importance >= 5
+          AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL)
+          AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)
+        ORDER BY importance DESC, accessed_at DESC LIMIT 5
+      `).all(project) as Array<{ content: string; memory_type: string }>;
 
-    if (tasks.length > 0) {
-      lines.push('## 📋 Pending Tasks');
-      for (const t of tasks) {
-        const icon = t.status === 'in_progress' ? '🔄' : '⏳';
-        lines.push(`- ${icon} [P${t.priority}] ${t.title}`);
+      if (memories.length > 0) {
+        const typeIcons: Record<string, string> = {
+          decision: '🎯', learning: '📚', error: '⚠️', preference: '💡'
+        };
+        lines.push('## Key Memories');
+        for (const m of memories) {
+          const icon = typeIcons[m.memory_type] || '💭';
+          const content = m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content;
+          lines.push(`- ${icon} ${content}`);
+        }
+        lines.push('');
       }
-      lines.push('');
-    }
-
-    // 중요 메모리
-    const memories = db.prepare(`
-      SELECT content, memory_type FROM memories
-      WHERE project = ?
-      ORDER BY importance DESC, created_at DESC LIMIT 5
-    `).all(project) as Array<{ content: string; memory_type: string }>;
-
-    if (memories.length > 0) {
-      const typeIcons: Record<string, string> = {
-        observation: '👀', decision: '🎯', learning: '📚', error: '⚠️', pattern: '🔄'
-      };
-      lines.push('## 🧠 Key Memories');
-      for (const m of memories) {
-        const icon = typeIcons[m.memory_type] || '💭';
-        const content = m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content;
-        lines.push(`- ${icon} [${m.memory_type}] ${content}`);
-      }
-      lines.push('');
-    }
+    } catch { /* ignore */ }
 
     db.close();
 
     lines.push('---');
-    lines.push('_Auto-injected by session-continuity. Use `session_end` when done._');
+    lines.push('_Auto-injected by session-continuity v2. Use `session_end` when done._');
 
     return lines.join('\n');
   } catch (e) {

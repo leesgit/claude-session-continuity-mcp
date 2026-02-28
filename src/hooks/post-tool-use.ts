@@ -225,25 +225,8 @@ async function main() {
         // 오류 시 무시
       }
 
-      // 중요 변경사항은 메모리에 기록 (하루에 같은 파일 중복 방지)
-      const today = new Date().toISOString().slice(0, 10);
-      const existingMemory = db.prepare(`
-        SELECT id FROM memories
-        WHERE project = ?
-          AND content LIKE ?
-          AND date(created_at) = ?
-      `).get(project, `%${path.basename(filePath)}%`, today);
-
-      if (!existingMemory) {
-        db.prepare(`
-          INSERT INTO memories (content, memory_type, project, importance, tags)
-          VALUES (?, 'observation', ?, 3, ?)
-        `).run(
-          `[File Change] ${summary}`,
-          project,
-          JSON.stringify(['auto-tracked', changeType, getFileExtension(filePath)])
-        );
-      }
+      // auto-tracked 메모리 기록 제거 (v1.10.0)
+      // git이 파일 변경을 더 잘 추적함. hot_paths + recent_files만 유지.
     }
 
     db.close();
