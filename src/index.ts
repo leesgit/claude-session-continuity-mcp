@@ -2167,24 +2167,28 @@ async function generateProjectContext(project: string): Promise<string> {
     lines.push('');
   }
 
-  // 5. 최근 관련 메모리 (중요도 높은 것 5개)
+  // 5. 중요 메모리 (노이즈 필터링 - v1.10.0)
   const recentMemories = db.prepare(`
     SELECT id, content, memory_type, importance FROM memories
     WHERE project = ?
-    ORDER BY importance DESC, created_at DESC LIMIT 5
+      AND memory_type IN ('decision', 'learning', 'error', 'preference')
+      AND importance >= 5
+      AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL)
+      AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)
+    ORDER BY importance DESC, accessed_at DESC LIMIT 5
   `).all(project) as Array<{ id: number; content: string; memory_type: string; importance: number }>;
 
   if (recentMemories.length > 0) {
-    lines.push(`## 🧠 중요 메모리`);
+    lines.push(`## 🧠 Key Memories`);
     for (const mem of recentMemories) {
-      const typeIcon = {
-        observation: '👀',
+      const typeIcon: Record<string, string> = {
         decision: '🎯',
         learning: '📚',
         error: '⚠️',
-        pattern: '🔄'
-      }[mem.memory_type] || '💭';
-      lines.push(`- ${typeIcon} [${mem.memory_type}] ${mem.content.substring(0, 100)}${mem.content.length > 100 ? '...' : ''}`);
+        preference: '💡'
+      };
+      const icon = typeIcon[mem.memory_type] || '💭';
+      lines.push(`- ${icon} ${mem.content.substring(0, 100)}${mem.content.length > 100 ? '...' : ''}`);
     }
     lines.push('');
   }
@@ -2212,9 +2216,10 @@ async function generateProjectContext(project: string): Promise<string> {
 async function generateRecentMemories(project?: string, limit: number = 10): Promise<string> {
   const lines: string[] = ['# 🧠 최근 메모리\n'];
 
+  const noiseFilter = `AND memory_type IN ('decision','learning','error','preference') AND importance >= 5 AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL) AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)`;
   const sql = project
-    ? `SELECT id, content, memory_type, project, importance, created_at FROM memories WHERE project = ? ORDER BY importance DESC, created_at DESC LIMIT ?`
-    : `SELECT id, content, memory_type, project, importance, created_at FROM memories ORDER BY importance DESC, created_at DESC LIMIT ?`;
+    ? `SELECT id, content, memory_type, project, importance, created_at FROM memories WHERE project = ? ${noiseFilter} ORDER BY importance DESC, created_at DESC LIMIT ?`
+    : `SELECT id, content, memory_type, project, importance, created_at FROM memories WHERE 1=1 ${noiseFilter} ORDER BY importance DESC, created_at DESC LIMIT ?`;
 
   const memories = project
     ? db.prepare(sql).all(project, limit)
