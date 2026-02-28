@@ -278,6 +278,16 @@ async function generateEmbedding(text: string, type: 'query' | 'passage' = 'quer
   }
 }
 
+function parseTags(tags: string | null): string[] {
+  if (!tags) return [];
+  try {
+    const parsed = JSON.parse(tags);
+    return Array.isArray(parsed) ? parsed : [String(parsed)];
+  } catch {
+    return tags.split(',').map(t => t.trim()).filter(Boolean);
+  }
+}
+
 function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
   let dot = 0, normA = 0, normB = 0;
@@ -1697,7 +1707,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           content: (m.content as string).substring(0, 300) + ((m.content as string).length > 300 ? '...' : ''),
           type: m.memory_type,
           project: m.project || 'global',
-          tags: m.tags ? JSON.parse(m.tags as string) : [],
+          tags: parseTags(m.tags as string),
           importance: m.importance,
           similarity: m.similarity ? Math.round((m.similarity as number) * 100) + '%' : undefined,
           created: m.created_at
