@@ -41,26 +41,34 @@ function getDbPath(cwd: string): string {
 }
 
 function detectProject(cwd: string): string {
-  // apps/ 하위 프로젝트 감지
-  const appsMatch = cwd.match(/apps[\/\\]([^\/\\]+)/);
-  if (appsMatch) return appsMatch[1];
+  const workspaceRoot = detectWorkspaceRoot(cwd);
+  const appsDir = path.join(workspaceRoot, 'apps');
 
-  // package.json 기반
-  let current = cwd;
-  while (current !== path.parse(current).root) {
-    const pkgPath = path.join(current, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-        return pkg.name || path.basename(current);
-      } catch {
-        return path.basename(current);
-      }
-    }
-    current = path.dirname(current);
+  // apps/ 하위인지 확인
+  if (cwd.startsWith(appsDir + path.sep)) {
+    const relative = path.relative(appsDir, cwd);
+    return relative.split(path.sep)[0];
   }
 
-  return path.basename(cwd);
+  // apps/ 외부 하위 프로젝트 (hackathons/ 등)
+  if (cwd !== workspaceRoot) {
+    let current = cwd;
+    while (current !== workspaceRoot && current !== path.parse(current).root) {
+      const pkgPath = path.join(current, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          return pkg.name || path.basename(current);
+        } catch {
+          return path.basename(current);
+        }
+      }
+      current = path.dirname(current);
+    }
+  }
+
+  // 워크스페이스 루트 → 폴더명 반환
+  return path.basename(workspaceRoot);
 }
 
 function extractKeyPoints(transcript: Array<{ role: string; content: string }>): string[] {
@@ -132,7 +140,7 @@ async function main() {
       // 중요 메모리로 저장
       db.prepare(`
         INSERT INTO memories (content, memory_type, project, importance, tags)
-        VALUES (?, 'pattern', ?, 8, 'auto-compact,session-summary')
+        VALUES (?, 'pattern', ?, 8, '["auto-compact","session-summary"]')
       `).run(`[Pre-Compact Summary] ${keyPoints.join(' | ')}`, project);
 
       // 활성 컨텍스트 업데이트

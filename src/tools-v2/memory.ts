@@ -6,6 +6,17 @@ import { logger } from '../utils/logger.js';
 import { MemoryStoreSchema, MemorySearchSchema, MemoryDeleteSchema } from '../schemas.js';
 import type { Tool, CallToolResult } from '../types.js';
 
+// 태그 파싱 헬퍼 (JSON 배열 또는 콤마구분 문자열 모두 처리)
+function parseTags(tags: string | null): string[] {
+  if (!tags) return [];
+  try {
+    const parsed = JSON.parse(tags);
+    return Array.isArray(parsed) ? parsed : [String(parsed)];
+  } catch {
+    return tags.split(',').map(t => t.trim()).filter(Boolean);
+  }
+}
+
 // ===== 도구 정의 =====
 
 export const memoryTools: Tool[] = [
@@ -222,7 +233,7 @@ async function performFTSSearch(
     id: row.id,
     content: row.content.length > 300 ? row.content.slice(0, 300) + '...' : row.content,
     type: row.memory_type,
-    tags: row.tags ? JSON.parse(row.tags) : [],
+    tags: parseTags(row.tags),
     project: row.project,
     importance: row.importance,
     createdAt: row.created_at
@@ -309,7 +320,7 @@ async function performSemanticSearch(
     id: row.id,
     content: row.content.length > 300 ? row.content.slice(0, 300) + '...' : row.content,
     type: row.memory_type,
-    tags: row.tags ? JSON.parse(row.tags) : [],
+    tags: parseTags(row.tags),
     project: row.project,
     importance: row.importance,
     similarity: Math.round(row.similarity * 100) / 100,

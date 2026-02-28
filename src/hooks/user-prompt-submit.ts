@@ -19,9 +19,6 @@ function detectWorkspaceRoot(cwd: string): string {
   while (current !== root) {
     if (fs.existsSync(path.join(current, 'apps'))) return current;
     if (fs.existsSync(path.join(current, '.claude', 'sessions.db'))) return current;
-    if (fs.existsSync(path.join(current, 'package.json'))) {
-      return current;
-    }
     current = path.dirname(current);
   }
 
@@ -31,16 +28,31 @@ function detectWorkspaceRoot(cwd: string): string {
 function getProject(cwd: string, workspaceRoot: string): string | null {
   const appsDir = path.join(workspaceRoot, 'apps');
 
+  // apps/ 하위인지 확인
   if (cwd.startsWith(appsDir + path.sep)) {
     const relative = path.relative(appsDir, cwd);
     return relative.split(path.sep)[0];
   }
 
-  if (!fs.existsSync(appsDir)) {
-    return path.basename(workspaceRoot);
+  // apps/ 외부 하위 프로젝트 (hackathons/ 등)
+  if (cwd !== workspaceRoot) {
+    let current = cwd;
+    while (current !== workspaceRoot && current !== path.parse(current).root) {
+      const pkgPath = path.join(current, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          return pkg.name || path.basename(current);
+        } catch {
+          return path.basename(current);
+        }
+      }
+      current = path.dirname(current);
+    }
   }
 
-  return null;
+  // 워크스페이스 루트 (모노레포 포함) → 폴더명 반환
+  return path.basename(workspaceRoot);
 }
 
 // ===== 과거 참조 자동 감지 =====
@@ -382,27 +394,14 @@ async function main() {
   }
 
   try {
-    // stdin에서 입력 읽기 (타임아웃 방지)
+    // stdin에서 입력 읽기
     let inputData = '';
-    const timeout = setTimeout(() => {
-      // 입력 없으면 그냥 진행
-    }, 100);
-
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => {
+    for await (const chunk of process.stdin) {
       inputData += chunk;
-    });
+    }
 
-    await new Promise<void>((resolve) => {
-      process.stdin.on('end', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-      // 100ms 후 타임아웃
-      setTimeout(resolve, 100);
-    });
-
-    const cwd = process.cwd();
+    const input: PromptInput = inputData ? JSON.parse(inputData) : {};
+    const cwd = input.cwd || process.cwd();
     const workspaceRoot = detectWorkspaceRoot(cwd);
     const project = getProject(cwd, workspaceRoot);
 
@@ -413,18 +412,11 @@ async function main() {
     const dbPath = path.join(workspaceRoot, '.claude', 'sessions.db');
 
     // 사용자 프롬프트에서 지시사항 추출
-    let userPrompt: string | undefined;
-    if (inputData) {
-      try {
-        const parsed = JSON.parse(inputData) as PromptInput;
-        if (parsed.prompt) {
-          userPrompt = parsed.prompt;
-          extractAndSaveDirectives(dbPath, project, parsed.prompt);
-        }
-      } catch { /* ignore */ }
+    if (input.prompt) {
+      extractAndSaveDirectives(dbPath, project, input.prompt);
     }
 
-    const context = loadContext(dbPath, project, userPrompt);
+    const context = loadContext(dbPath, project, input.prompt);
 
     if (context) {
       console.log(`\n<project-context project="${project}">\n${context}\n</project-context>\n`);

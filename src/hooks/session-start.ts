@@ -34,41 +34,25 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
     return relative.split(path.sep)[0];
   }
 
-  // 워크스페이스 루트 자체에서 실행
-  if (cwd === workspaceRoot) {
-    // 모노레포(apps/ 있음)에서 루트 실행 → 프로젝트 없음
-    if (fs.existsSync(appsDir)) {
-      return null;
-    }
-    // 단일 프로젝트 모드 → package.json 이름 또는 폴더명
-    const pkgPath = path.join(workspaceRoot, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-        return pkg.name || path.basename(workspaceRoot);
-      } catch {
-        return path.basename(workspaceRoot);
-      }
-    }
-    return path.basename(workspaceRoot);
-  }
-
   // apps/ 외부 하위 프로젝트 (hackathons/ 등) - package.json에서 이름 추출
-  let current = cwd;
-  while (current !== workspaceRoot && current !== path.parse(current).root) {
-    const pkgPath = path.join(current, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-        return pkg.name || path.basename(current);
-      } catch {
-        return path.basename(current);
+  if (cwd !== workspaceRoot) {
+    let current = cwd;
+    while (current !== workspaceRoot && current !== path.parse(current).root) {
+      const pkgPath = path.join(current, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          return pkg.name || path.basename(current);
+        } catch {
+          return path.basename(current);
+        }
       }
+      current = path.dirname(current);
     }
-    current = path.dirname(current);
   }
 
-  return null;
+  // 워크스페이스 루트 (모노레포 포함) → 폴더명 반환
+  return path.basename(workspaceRoot);
 }
 
 function loadContext(dbPath: string, project: string): string | null {

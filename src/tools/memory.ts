@@ -3,6 +3,18 @@ import { db } from '../db/database.js';
 import { generateEmbedding, embeddingToBuffer } from '../utils/embedding.js';
 import type { Tool, CallToolResult } from '../types.js';
 
+// 태그 파싱 헬퍼 (JSON 배열 또는 콤마구분 문자열 모두 처리)
+function parseTags(tags: string | null): string[] {
+  if (!tags) return [];
+  try {
+    const parsed = JSON.parse(tags);
+    return Array.isArray(parsed) ? parsed : [String(parsed)];
+  } catch {
+    // 콤마구분 문자열 fallback (e.g. "auto-tracked,code,ts")
+    return tags.split(',').map(t => t.trim()).filter(Boolean);
+  }
+}
+
 // ===== 도구 정의 =====
 
 export const memoryTools: Tool[] = [
@@ -213,7 +225,7 @@ export function recallMemory(
         ? row.content.slice(0, maxContentLength) + '...'
         : row.content,
       type: row.memory_type,
-      tags: row.tags ? JSON.parse(row.tags) : [],
+      tags: parseTags(row.tags),
       project: row.project,
       importance: row.importance,
       createdAt: row.created_at,
@@ -285,7 +297,7 @@ export function recallByTimeframe(
       id: row.id,
       content: row.content,
       type: row.memory_type,
-      tags: row.tags ? JSON.parse(row.tags) : [],
+      tags: parseTags(row.tags),
       project: row.project,
       importance: row.importance,
       createdAt: row.created_at
@@ -320,7 +332,7 @@ export function searchByTag(
     sql += matchAll ? conditions.join(' AND ') : conditions.join(' OR ');
     sql += ` ORDER BY importance DESC, created_at DESC LIMIT ?`;
 
-    const params = [...tags.map(t => `%"${t}"%`), limit];
+    const params = [...tags.map(t => `%${t}%`), limit];
     const stmt = db.prepare(sql);
     const rows = stmt.all(...params) as Array<{
       id: number;
@@ -336,7 +348,7 @@ export function searchByTag(
       id: row.id,
       content: row.content,
       type: row.memory_type,
-      tags: row.tags ? JSON.parse(row.tags) : [],
+      tags: parseTags(row.tags),
       project: row.project,
       importance: row.importance,
       createdAt: row.created_at

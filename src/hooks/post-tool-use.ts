@@ -7,7 +7,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import Database from 'better-sqlite3';
 
 interface ToolUseInput {
@@ -24,8 +23,22 @@ interface ToolUseInput {
   tool_result?: string;
 }
 
-function getDbPath(): string {
-  const claudeDir = path.join(os.homedir(), '.claude');
+function detectWorkspaceRoot(cwd: string): string {
+  let current = cwd;
+  const root = path.parse(current).root;
+
+  while (current !== root) {
+    if (fs.existsSync(path.join(current, 'apps'))) return current;
+    if (fs.existsSync(path.join(current, '.claude', 'sessions.db'))) return current;
+    current = path.dirname(current);
+  }
+
+  return cwd;
+}
+
+function getDbPath(cwd: string): string {
+  const workspaceRoot = detectWorkspaceRoot(cwd);
+  const claudeDir = path.join(workspaceRoot, '.claude');
   if (!fs.existsSync(claudeDir)) {
     fs.mkdirSync(claudeDir, { recursive: true });
   }
@@ -33,24 +46,34 @@ function getDbPath(): string {
 }
 
 function detectProject(cwd: string): string {
-  const appsMatch = cwd.match(/apps[\/\\]([^\/\\]+)/);
-  if (appsMatch) return appsMatch[1];
+  const workspaceRoot = detectWorkspaceRoot(cwd);
+  const appsDir = path.join(workspaceRoot, 'apps');
 
-  let current = cwd;
-  while (current !== path.parse(current).root) {
-    const pkgPath = path.join(current, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-        return pkg.name || path.basename(current);
-      } catch {
-        return path.basename(current);
-      }
-    }
-    current = path.dirname(current);
+  // apps/ 하위인지 확인
+  if (cwd.startsWith(appsDir + path.sep)) {
+    const relative = path.relative(appsDir, cwd);
+    return relative.split(path.sep)[0];
   }
 
-  return path.basename(cwd);
+  // apps/ 외부 하위 프로젝트 (hackathons/ 등)
+  if (cwd !== workspaceRoot) {
+    let current = cwd;
+    while (current !== workspaceRoot && current !== path.parse(current).root) {
+      const pkgPath = path.join(current, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          return pkg.name || path.basename(current);
+        } catch {
+          return path.basename(current);
+        }
+      }
+      current = path.dirname(current);
+    }
+  }
+
+  // 워크스페이스 루트 → 폴더명 반환
+  return path.basename(workspaceRoot);
 }
 
 function getFileExtension(filePath: string): string {
@@ -137,7 +160,7 @@ async function main() {
 
     const cwd = input.cwd || process.cwd();
     const project = detectProject(cwd);
-    const dbPath = getDbPath();
+    const dbPath = getDbPath(cwd);
 
     if (!fs.existsSync(dbPath)) {
       process.exit(0);
@@ -218,7 +241,7 @@ async function main() {
         `).run(
           `[File Change] ${summary}`,
           project,
-          `auto-tracked,${changeType},${getFileExtension(filePath)}`
+          JSON.stringify(['auto-tracked', changeType, getFileExtension(filePath)])
         );
       }
     }
