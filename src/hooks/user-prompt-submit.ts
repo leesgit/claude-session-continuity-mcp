@@ -328,22 +328,26 @@ function loadContext(dbPath: string, project: string, prompt?: string): string |
       lines.push('');
     }
 
-    // 중요 메모리
+    // 중요 메모리 (노이즈 필터링 - v1.10.0)
     const memories = db.prepare(`
       SELECT content, memory_type, importance FROM memories
       WHERE project = ?
-      ORDER BY importance DESC, created_at DESC LIMIT 5
+        AND memory_type IN ('decision', 'learning', 'error', 'preference')
+        AND importance >= 5
+        AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL)
+        AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)
+      ORDER BY importance DESC, accessed_at DESC LIMIT 5
     `).all(project) as Array<{ content: string; memory_type: string; importance: number }>;
 
     if (memories.length > 0) {
       const typeIcons: Record<string, string> = {
-        observation: '👀', decision: '🎯', learning: '📚', error: '⚠️', pattern: '🔄'
+        decision: '🎯', learning: '📚', error: '⚠️', preference: '💡'
       };
-      lines.push('## 🧠 Key Memories');
+      lines.push('## Key Memories');
       for (const m of memories) {
         const icon = typeIcons[m.memory_type] || '💭';
         const content = m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content;
-        lines.push(`- ${icon} [${m.memory_type}] ${content}`);
+        lines.push(`- ${icon} ${content}`);
       }
       lines.push('');
     }
