@@ -59,8 +59,13 @@ export const MemorySearchSchema = z.object({
   project: ProjectNameSchema.optional(),
   semantic: z.boolean().default(false).describe('시맨틱 검색 사용'),
   limit: z.number().min(1).max(50).default(10).describe('최대 결과 수'),
-  minImportance: z.number().min(1).max(10).default(1).describe('최소 중요도')
+  minImportance: z.number().min(1).max(10).default(1).describe('최소 중요도'),
+  detail: z.boolean().default(false).describe('true면 전체 content 반환, false면 요약 인덱스만')
 }).describe('메모리 검색 (FTS 또는 시맨틱)');
+
+export const MemoryGetSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(20).describe('조회할 메모리 ID 목록')
+}).describe('메모리 ID로 전체 내용 조회');
 
 export const MemoryDeleteSchema = z.object({
   id: z.number().int().positive().describe('삭제할 메모리 ID')
@@ -129,6 +134,7 @@ export const ToolSchemas = {
   context_update: ContextUpdateSchema,
   memory_store: MemoryStoreSchema,
   memory_search: MemorySearchSchema,
+  memory_get: MemoryGetSchema,
   memory_delete: MemoryDeleteSchema,
   memory_stats: z.object({}).describe('메모리 통계'),
   task_manage: TaskManageSchema,
@@ -147,6 +153,7 @@ export type ContextUpdateInput = z.infer<typeof ContextUpdateSchema>;
 export type MemoryStoreInput = z.infer<typeof MemoryStoreSchema>;
 export type MemorySearchInput = z.infer<typeof MemorySearchSchema>;
 export type MemoryDeleteInput = z.infer<typeof MemoryDeleteSchema>;
+export type MemoryGetInput = z.infer<typeof MemoryGetSchema>;
 export type TaskManageInput = z.infer<typeof TaskManageSchema>;
 export type VerifyInput = z.infer<typeof VerifySchema>;
 export type LearnInput = z.infer<typeof LearnSchema>;

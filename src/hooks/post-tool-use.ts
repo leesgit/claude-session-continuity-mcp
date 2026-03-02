@@ -23,6 +23,71 @@ interface ToolUseInput {
   tool_result?: string;
 }
 
+// ===== 에러 감지 → 솔루션 자동 주입 =====
+
+const ERROR_PATTERNS = [
+  /(?:error|Error|ERROR)\s*[:\[]/,
+  /(?:FAILED|FAIL|failed)\s/,
+  /(?:Cannot find|Module not found|No such file)/,
+  /(?:Permission denied|EACCES|EPERM)/,
+  /(?:command not found|ENOENT)/,
+  /exit code [1-9]/,
+  /(?:TypeError|SyntaxError|ReferenceError|RangeError)\s*:/,
+  /(?:FATAL|panic|segfault)/i,
+];
+
+function extractErrorSignature(output: string): string | null {
+  const lines = output.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length < 10) continue;
+    for (const pattern of ERROR_PATTERNS) {
+      if (pattern.test(trimmed)) {
+        // 에러 라인에서 시그니처 추출 (파일 경로/라인번호 제거, 핵심만)
+        return trimmed
+          .replace(/\s+at\s+.+$/, '')  // stack trace 제거
+          .replace(/\(.*?\)/g, '')      // 경로 괄호 제거
+          .slice(0, 80)
+          .trim();
+      }
+    }
+  }
+  return null;
+}
+
+function searchSolutions(db: InstanceType<typeof Database>, project: string, errorSig: string): Array<{
+  error_signature: string;
+  solution: string;
+  project: string;
+  created_at: string;
+}> {
+  try {
+    // 에러 키워드 추출 (3글자 이상 단어)
+    const keywords = errorSig.split(/\s+/).filter(w => w.length > 3).slice(0, 3);
+    if (keywords.length === 0) return [];
+
+    const likeConditions = keywords.map(() => 'error_signature LIKE ?').join(' OR ');
+    const likeParams = keywords.map(k => `%${k}%`);
+
+    return db.prepare(`
+      SELECT error_signature, solution, project, created_at
+      FROM solutions
+      WHERE (${likeConditions})
+      ORDER BY
+        CASE WHEN project = ? THEN 0 ELSE 1 END,
+        created_at DESC
+      LIMIT 2
+    `).all(...likeParams, project) as Array<{
+      error_signature: string;
+      solution: string;
+      project: string;
+      created_at: string;
+    }>;
+  } catch {
+    return [];
+  }
+}
+
 function detectWorkspaceRoot(cwd: string): string {
   let current = cwd;
   const root = path.parse(current).root;
@@ -131,11 +196,42 @@ async function main() {
 
     const input: ToolUseInput = inputData ? JSON.parse(inputData) : {};
 
+    const toolName = input.tool_name;
+    if (!toolName) {
+      process.exit(0);
+    }
+
+    // Bash 에러 감지 → 솔루션 자동 주입
+    if (toolName === 'Bash' && input.tool_result) {
+      const errorSig = extractErrorSignature(input.tool_result);
+      if (errorSig) {
+        const cwd = input.cwd || process.cwd();
+        const project = detectProject(cwd);
+        const dbPath = getDbPath(cwd);
+        if (fs.existsSync(dbPath)) {
+          try {
+            const db = new Database(dbPath, { readonly: true });
+            const solutions = searchSolutions(db, project, errorSig);
+            db.close();
+            if (solutions.length > 0) {
+              const lines = ['## Past solutions for similar error\n'];
+              for (const s of solutions) {
+                const sol = s.solution.length > 100 ? s.solution.slice(0, 100) + '...' : s.solution;
+                const date = s.created_at?.slice(0, 10) || '';
+                lines.push(`- **${s.error_signature.slice(0, 60)}** → ${sol} (${s.project}, ${date})`);
+              }
+              console.log(`\n<past-solution>\n${lines.join('\n')}\n</past-solution>\n`);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+      process.exit(0);
+    }
+
     const TRACKED_TOOLS = ['Edit', 'Write', 'Read', 'Glob', 'Grep'];
     const IGNORED_PATTERNS = ['node_modules', '.git/', 'dist/', 'build/', '.next/', 'coverage/', '.DS_Store'];
 
-    const toolName = input.tool_name;
-    if (!toolName || !TRACKED_TOOLS.includes(toolName)) {
+    if (!TRACKED_TOOLS.includes(toolName)) {
       process.exit(0);
     }
 

@@ -1,6 +1,6 @@
-# claude-session-continuity-mcp (v1.9.0)
+# claude-session-continuity-mcp (v1.12.0)
 
-> **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search
+> **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search + auto error→solution pipeline
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -25,27 +25,36 @@ Every new Claude Code session:
 **Fully automatic.** Claude Hooks handle everything without manual calls:
 
 ```bash
-# Session start → Auto-loads relevant context (Git-based semantic search)
-# When asking → Auto-injects memories/solutions related to your query
-# During conversation → Auto-captures important decisions/errors/learnings
-# On commit → Commit messages automatically become memories
+# Session start → Auto-loads relevant context + recent session history
+# When asking → Auto-injects relevant memories/solutions
+# During conversation → Tracks active files + auto-injects error solutions
+# On compact → Structured handover context for continuity
+# On exit → Extracts commits, decisions, error-fix pairs from transcript
 ```
 
 ```
 ← Auto-output on session start:
-# 🚀 my-app - Session Resumed
+# my-app - Session Resumed
 
-## Tech Stack
-**framework**: Next.js, **language**: TypeScript
+📍 **State**: Implementing signup form
 
-## Current State
-📍 Implementing signup form
-🚧 **Blocker**: OAuth callback URL issue
+## Recent Sessions
+### 2026-02-28
+**Work**: Completed OAuth integration with Google provider
+**Commits**: feat: add OAuth callback handler; fix: redirect URI config
+**Decisions**: Use Server Actions instead of API routes
 
-## 🧠 Relevant Memories (semantic: 0.89)
-- 🎯 [decision] Decided on App Router, using Server Actions
-- ⚠️ [error] OAuth redirect_uri mismatch → check env file
-- 📚 [learning] Zod form validation gives automatic type inference
+### 2026-02-27
+**Work**: Set up authentication foundation
+**Next**: Implement signup form validation
+
+## Directives
+- 🔴 Always use Zod for form validation
+- 📎 Prefer Server Components by default
+
+## Key Memories
+- 🎯 Decided on App Router, using Server Actions
+- ⚠️ OAuth redirect_uri mismatch → check env file
 ```
 
 **Zero manual work. Context follows you.**
@@ -63,8 +72,6 @@ npm install claude-session-continuity-mcp
 **That's it!** The postinstall script automatically:
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.json`
-
-> **v1.6.1:** Fixed critical bug where hooks were installed to wrong settings file. Now correctly installs to `~/.claude/settings.json`. Auto-migrates existing users from `settings.local.json`.
 
 ### What Gets Installed
 
@@ -101,9 +108,9 @@ npm install claude-session-continuity-mcp
 |------|---------|----------|
 | `SessionStart` | `claude-hook-session-start` | Auto-loads project context on session start |
 | `UserPromptSubmit` | `claude-hook-user-prompt` | Auto-injects relevant memories + past reference search |
-| `PostToolUse` | `claude-hook-post-tool` | Tracks file changes (Edit, Write) automatically |
-| `PreCompact` | `claude-hook-pre-compact` | Saves important context before compression |
-| `Stop` | `claude-hook-session-end` | Auto-saves session on exit (no manual call needed) |
+| `PostToolUse` | `claude-hook-post-tool` | Tracks active files (Edit, Write) + auto-injects error solutions (Bash) |
+| `PreCompact` | `claude-hook-pre-compact` | Structured handover context before compression |
+| `Stop` | `claude-hook-session-end` | Extracts commits, decisions, error-fix pairs from transcript |
 
 ### Manual Hook Management
 
@@ -129,19 +136,21 @@ After installation, restart Claude Code to activate the hooks.
 | Feature | Description |
 |---------|-------------|
 | 🤖 **Zero Manual Work** | Claude Hooks automate all context capture/load |
-| 🎯 **Query-Based Injection** | Selectively inject only relevant memories/solutions |
+| 🎯 **Quality Memory Only** | **(v1.10.0)** Only decisions, learnings, errors — no file-change noise |
 | 🧠 **Semantic Search** | multilingual-e5-small embedding (94+ languages, 384d) |
 | 🌍 **Multilingual** | Korean/English/Japanese + cross-language search (EN→KR, KR→EN) |
-| 🔗 **Git Integration** | Commit messages auto-memorized |
+| 🔗 **Git Integration** | Commit messages auto-extracted from transcripts |
 | 🕸️ **Knowledge Graph** | Memory relations (solves, causes, extends...) |
-| 📊 **Memory Classification** | 6 types: observation, decision, learning, error, pattern, code |
+| 📊 **Memory Classification** | 5 types: observation, decision, learning, error, pattern |
 | ✅ **Integrated Verification** | One-click build/test/lint execution |
 | 📋 **Task Management** | Priority-based task management |
-| 🔧 **Solution Archive** | Auto-search error solutions |
-| 📁 **File Change Tracking** | **(v1.5.0)** Auto-track Edit/Write tool usage |
-| 💾 **Auto Backup** | **(v1.5.0)** Daily SQLite backup (max 5) |
-| 🛡️ **PreCompact Save** | **(v1.5.0)** Save context before compression |
-| 🚪 **Auto Session End** | **(v1.5.0)** No manual session_end needed |
+| 🔧 **Auto Error→Solution** | **(v1.12.0)** Bash errors auto-detect → inject past solutions; session-end auto-records error-fix pairs |
+| 💰 **Token Efficiency** | **(v1.11.0)** Removed loadContext from UserPromptSubmit (saves 24-60K tokens/session) |
+| 📑 **Progressive Disclosure** | **(v1.11.0)** memory_search returns index first, memory_get for full content |
+| ⏳ **Temporal Decay** | **(v1.11.0)** Memory scoring with type-specific half-lives for relevance |
+| 📝 **Structured Handover** | **(v1.10.0)** PreCompact saves work summary, active files, pending actions |
+| 🚪 **Smart Session End** | **(v1.10.0)** Extracts commits, decisions, error-fix pairs from transcript |
+| 🗑️ **Auto Noise Cleanup** | **(v1.10.0)** Auto-deletes stale observation memories (3d+) |
 | 🔍 **Past Reference Detection** | **(v1.8.0)** "저번에 X 어떻게 했어?" auto-searches DB |
 | 📝 **User Directive Extraction** | **(v1.8.0)** Auto-extracts "always/never" rules from prompts |
 
@@ -153,32 +162,57 @@ After installation, restart Claude Code to activate the hooks.
 
 **SessionStart Hook** (`npx claude-hook-session-start`):
 - Auto-detects project: monorepo (`apps/project-name/`) or single project (`package.json` root folder name)
-- Loads context from `~/.claude/sessions.db`
-- Injects: Tech stack, current state, pending tasks, recent memories
+- Loads context from `.claude/sessions.db`
+- Injects: Current state, **3 recent sessions** with commits/decisions, directives, pending tasks, filtered key memories
+- Auto-cleans stale noise memories (3d+ auto-tracked, 14d+ auto-compact)
 
 **UserPromptSubmit Hook** (`npx claude-hook-user-prompt`):
 - Runs on every prompt submission
-- Injects relevant context based on current project
+- **(v1.11.0)** No longer calls loadContext() — saves 24-60K tokens/session
+- Injects relevant context (filtered: decisions, learnings, errors only)
+
+**PostToolUse Hook** (`npx claude-hook-post-tool`):
+- Tracks hot file paths and updates `active_context.recent_files`
+- **(v1.12.0)** Auto-detects Bash errors → searches solutions DB → injects past solutions into context
+- **No longer creates observation memories** (v1.10.0 — eliminates `[File Change]` noise)
+
+**PreCompact Hook** (`npx claude-hook-pre-compact`):
+- Builds structured handover context: work summary, active file, pending action, key facts, recent errors
+- **No longer stores auto-compact memories** (v1.10.0)
+
+**Stop Hook** (`npx claude-hook-session-end`):
+- Extracts commit messages from JSONL transcript (`git commit -m` patterns)
+- Extracts error-fix pairs (error → resolution within 3 messages)
+- **(v1.12.0)** Auto-records error→fix pairs to solutions table for future reuse
+- Extracts decisions ("because", "instead of", "chose" patterns)
+- **(v1.11.0)** Single-pass transcript parsing (4 JSONL reads → 1)
+- Stores structured metadata in `sessions.issues` column as JSON
 
 ### Example Output (Session Start)
 
 ```markdown
-# 🚀 my-app - Session Resumed
+# my-app - Session Resumed
 
-## Tech Stack
-**framework**: Next.js, **language**: TypeScript
-
-## Current State
-📍 Implementing signup form
+📍 **State**: Implementing signup form
 🚧 **Blocker**: OAuth callback URL issue
 
-## 📋 Pending Tasks
+## Recent Sessions
+### 2026-02-28
+**Work**: Completed OAuth integration
+**Commits**: feat: add OAuth handler; fix: redirect config
+**Decisions**: Use Server Actions over API routes
+**Next**: Implement form validation
+
+## Directives
+- 🔴 Always use Zod for validation
+
+## Pending Tasks
 - 🔄 [P8] Implement form validation
 - ⏳ [P5] Add error handling
 
-## 🧠 Key Memories
-- 🎯 [decision] Decided on App Router, using Server Actions
-- ⚠️ [error] OAuth redirect_uri mismatch → check env file
+## Key Memories
+- 🎯 Decided on App Router, using Server Actions
+- ⚠️ OAuth redirect_uri mismatch → check env file
 ```
 
 ### Hook Management
@@ -253,7 +287,7 @@ Now we use `npm exec --`:
 
 ---
 
-## Tools (v5 API) - 24 Focused Tools
+## Tools (v5 API) - 25 Focused Tools
 
 ### 1. Session Lifecycle (4) ⭐
 
@@ -336,7 +370,7 @@ verify_test({ project: "my-app" })
 verify_all({ project: "my-app" })
 ```
 
-### 6. Memory System (4)
+### 6. Memory System (5)
 
 ```javascript
 // Store a classified memory
@@ -349,13 +383,16 @@ memory_store({
   relatedTo: 23  // Connect to existing memory
 })
 
-// Search memories (keyword or semantic)
+// Search memories — returns index (id, type, tags, score) for token efficiency
 memory_search({
   query: "state management test",
   type: "learning",
   semantic: true,  // Use embedding similarity
   limit: 10
 })
+
+// Get full memory content by ID (v1.11.0)
+memory_get({ memoryId: 23 })
 
 // Find related memories (graph + semantic)
 memory_related({
@@ -496,6 +533,19 @@ npm run test:coverage
 - [x] Empty session skip and techStack save improvements (v1.7.1)
 - [x] Past reference auto-detection in UserPromptSubmit hook (v1.8.0)
 - [x] User directive extraction ("always/never" rules) (v1.8.0)
+- [x] Memory quality overhaul — no more `[File Change]` noise (v1.10.0)
+- [x] Structured handover context in PreCompact (v1.10.0)
+- [x] Smart session-end: commit/decision/error-fix extraction from transcript (v1.10.0)
+- [x] Auto noise cleanup (3d+ observations, 14d+ auto-compact) (v1.10.0)
+- [x] 3 recent sessions display with structured metadata (v1.10.0)
+- [x] Token efficiency — remove loadContext from UserPromptSubmit, saves 24-60K tokens/session (v1.11.0)
+- [x] Single-pass transcript parsing, 4 JSONL reads → 1 (v1.11.0)
+- [x] Temporal decay for memory scoring with type-specific half-lives (v1.11.0)
+- [x] Progressive disclosure — memory_search returns index, memory_get for full content (v1.11.0)
+- [x] Memory consolidation via Jaccard similarity (v1.11.0)
+- [x] Auto error→solution pipeline — PostToolUse detects Bash errors, injects past solutions (v1.12.0)
+- [x] SessionEnd auto-records error-fix pairs to solutions table (v1.12.0)
+- [x] Cross-project solution search with current project prioritization (v1.12.0)
 - [ ] sqlite-vec native vector search (v2 - when data > 1000 records)
 - [ ] Web dashboard
 - [ ] Cloud sync option

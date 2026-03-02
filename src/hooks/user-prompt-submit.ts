@@ -246,151 +246,6 @@ function extractAndSaveDirectives(dbPath: string, project: string, prompt: strin
   }
 }
 
-function loadContext(dbPath: string, project: string, prompt?: string): string | null {
-  if (!fs.existsSync(dbPath)) return null;
-
-  try {
-    const db = new Database(dbPath, { readonly: true });
-
-    const lines: string[] = [`# 🚀 ${project} Context\n`];
-
-    // 기술 스택
-    const fixed = db.prepare('SELECT tech_stack FROM project_context WHERE project = ?').get(project) as { tech_stack: string } | undefined;
-    if (fixed?.tech_stack) {
-      const stack = JSON.parse(fixed.tech_stack);
-      const stackStr = Object.entries(stack).map(([k, v]) => `**${k}**: ${v}`).join(', ');
-      lines.push(`## Tech Stack\n${stackStr}\n`);
-    }
-
-    // 현재 상태
-    const active = db.prepare('SELECT current_state, blockers, last_verification FROM active_context WHERE project = ?').get(project) as { current_state: string; blockers: string; last_verification: string } | undefined;
-    if (active?.current_state) {
-      lines.push(`## Current State`);
-      lines.push(`📍 ${active.current_state}`);
-      if (active.blockers) lines.push(`🚧 **Blocker**: ${active.blockers}`);
-      if (active.last_verification) {
-        const emoji = active.last_verification.includes('passed') ? '✅' : '❌';
-        lines.push(`${emoji} Last verify: ${active.last_verification}`);
-      }
-      lines.push('');
-    }
-
-    // 마지막 세션 (빈 세션 skip)
-    const last = db.prepare(`
-      SELECT last_work, next_tasks, timestamp FROM sessions
-      WHERE project = ?
-        AND last_work != 'Session ended'
-        AND last_work != 'Session work completed'
-        AND last_work != 'Session started'
-        AND last_work != ''
-      ORDER BY timestamp DESC LIMIT 1
-    `).get(project) as { last_work: string; next_tasks: string; timestamp: string } | undefined;
-    if (last?.last_work) {
-      lines.push(`## Last Session (${last.timestamp?.slice(0, 10) || 'unknown'})`);
-      lines.push(`**Work**: ${last.last_work}`);
-      if (last.next_tasks) {
-        const next = JSON.parse(last.next_tasks);
-        if (next.length > 0) lines.push(`**Next**: ${next.slice(0, 3).join(' → ')}`);
-      }
-      lines.push('');
-    }
-
-    // 사용자 지시사항
-    try {
-      const directives = db.prepare(`
-        SELECT directive, priority FROM user_directives
-        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
-      `).all(project) as Array<{ directive: string; priority: string }>;
-
-      if (directives.length > 0) {
-        lines.push('## 📌 Directives');
-        for (const d of directives) {
-          const icon = d.priority === 'high' ? '🔴' : '📎';
-          lines.push(`- ${icon} ${d.directive}`);
-        }
-        lines.push('');
-      }
-    } catch { /* table may not exist yet */ }
-
-    // 미완료 태스크
-    const tasks = db.prepare(`
-      SELECT id, title, priority, status FROM tasks
-      WHERE project = ? AND status IN ('pending', 'in_progress')
-      ORDER BY priority DESC LIMIT 5
-    `).all(project) as Array<{ id: number; title: string; priority: number; status: string }>;
-
-    if (tasks.length > 0) {
-      lines.push('## 📋 Pending Tasks');
-      for (const t of tasks) {
-        const icon = t.status === 'in_progress' ? '🔄' : '⏳';
-        lines.push(`- ${icon} [P${t.priority}] ${t.title} (#${t.id})`);
-      }
-      lines.push('');
-    }
-
-    // 중요 메모리 (노이즈 필터링 - v1.10.0)
-    const memories = db.prepare(`
-      SELECT content, memory_type, importance FROM memories
-      WHERE project = ?
-        AND memory_type IN ('decision', 'learning', 'error', 'preference')
-        AND importance >= 5
-        AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL)
-        AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)
-      ORDER BY importance DESC, accessed_at DESC LIMIT 5
-    `).all(project) as Array<{ content: string; memory_type: string; importance: number }>;
-
-    if (memories.length > 0) {
-      const typeIcons: Record<string, string> = {
-        decision: '🎯', learning: '📚', error: '⚠️', preference: '💡'
-      };
-      lines.push('## Key Memories');
-      for (const m of memories) {
-        const icon = typeIcons[m.memory_type] || '💭';
-        const content = m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content;
-        lines.push(`- ${icon} ${content}`);
-      }
-      lines.push('');
-    }
-
-    // 최근 에러 솔루션
-    const recentSolutions = db.prepare(`
-      SELECT error_signature, solution FROM solutions
-      WHERE project = ?
-      ORDER BY created_at DESC LIMIT 3
-    `).all(project) as Array<{ error_signature: string; solution: string }>;
-
-    if (recentSolutions.length > 0) {
-      lines.push('## 🔧 Recent Error Solutions');
-      for (const s of recentSolutions) {
-        const sol = s.solution.length > 80 ? s.solution.slice(0, 80) + '...' : s.solution;
-        lines.push(`- **${s.error_signature}**: ${sol}`);
-      }
-      lines.push('');
-    }
-
-    // 과거 참조 자동 검색 (프롬프트에서 과거 참조 패턴 감지 시)
-    if (prompt) {
-      const keyword = extractPastKeywords(prompt);
-      if (keyword) {
-        const pastWork = searchPastWork(db, keyword);
-        const pastSection = formatPastWork(pastWork);
-        if (pastSection) {
-          lines.push(pastSection);
-        }
-      }
-    }
-
-    db.close();
-
-    lines.push('---');
-    lines.push('_Auto-injected by MCP v5. Use `session_end` when done._');
-
-    return lines.join('\n');
-  } catch (e) {
-    return null;
-  }
-}
-
 async function main() {
   // 환경 변수로 비활성화 가능
   if (process.env.MCP_HOOKS_DISABLED === 'true') {
@@ -415,15 +270,25 @@ async function main() {
 
     const dbPath = path.join(workspaceRoot, '.claude', 'sessions.db');
 
-    // 사용자 프롬프트에서 지시사항 추출
+    // 사용자 프롬프트에서 지시사항 추출 (DB 저장, 출력 0 토큰)
     if (input.prompt) {
       extractAndSaveDirectives(dbPath, project, input.prompt);
     }
 
-    const context = loadContext(dbPath, project, input.prompt);
-
-    if (context) {
-      console.log(`\n<project-context project="${project}">\n${context}\n</project-context>\n`);
+    // 과거 참조 감지 시에만 출력 (~200 토큰)
+    if (input.prompt && fs.existsSync(dbPath)) {
+      const keyword = extractPastKeywords(input.prompt);
+      if (keyword) {
+        try {
+          const db = new Database(dbPath, { readonly: true });
+          const pastWork = searchPastWork(db, keyword);
+          const pastSection = formatPastWork(pastWork);
+          db.close();
+          if (pastSection) {
+            console.log(`\n<past-context project="${project}">\n${pastSection}\n</past-context>\n`);
+          }
+        } catch { /* ignore */ }
+      }
     }
 
     process.exit(0);

@@ -3,8 +3,40 @@
 import { db } from '../db/database.js';
 import { generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity } from '../utils/embedding.js';
 import { logger } from '../utils/logger.js';
-import { MemoryStoreSchema, MemorySearchSchema, MemoryDeleteSchema } from '../schemas.js';
+import { MemoryStoreSchema, MemorySearchSchema, MemoryGetSchema, MemoryDeleteSchema } from '../schemas.js';
 import type { Tool, CallToolResult } from '../types.js';
+
+// ===== Temporal Decay =====
+
+const DECAY_RATES: Record<string, number> = {
+  decision: 0.001,    // 반감기 ~693일
+  learning: 0.003,    // 반감기 ~231일
+  error: 0.01,        // 반감기 ~69일
+  pattern: 0.005,     // 반감기 ~139일
+  observation: 0.05,  // 반감기 ~14일
+  preference: 0.002,  // 반감기 ~347일
+};
+
+export function calculateDecayedScore(
+  importance: number,
+  memoryType: string,
+  createdAt: string,
+  accessCount: number
+): number {
+  const ageDays = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+  const decayRate = DECAY_RATES[memoryType] ?? 0.005;
+  return importance * Math.exp(-decayRate * ageDays) * Math.log2(accessCount + 2);
+}
+
+// ===== Jaccard 유사도 (Memory Consolidation) =====
+
+function jaccardSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const intersection = new Set([...wordsA].filter(w => wordsB.has(w)));
+  const union = new Set([...wordsA, ...wordsB]);
+  return union.size > 0 ? intersection.size / union.size : 0;
+}
 
 // 태그 파싱 헬퍼 (JSON 배열 또는 콤마구분 문자열 모두 처리)
 function parseTags(tags: string | null): string[] {
@@ -69,6 +101,19 @@ export const memoryTools: Tool[] = [
     }
   },
   {
+    name: 'memory_get',
+    description: `메모리 ID로 전체 내용 조회. memory_search 결과에서 상세 내용을 확인할 때 사용.
+- ids: 조회할 메모리 ID 배열 (최대 20개)
+- access_count 자동 증가`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'number' }, description: '메모리 ID 목록' }
+      },
+      required: ['ids']
+    }
+  },
+  {
     name: 'memory_delete',
     description: '메모리 삭제. 관련 임베딩도 함께 삭제됩니다.',
     inputSchema: {
@@ -109,37 +154,64 @@ export async function handleMemoryStore(args: unknown): Promise<CallToolResult> 
 
     const { content, type, tags, project, importance, metadata } = parsed.data;
 
-    const stmt = db.prepare(`
-      INSERT INTO memories (content, memory_type, tags, project, importance, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    // Memory Consolidation: 기존 유사 메모리와 병합 시도
+    let memoryId: number;
+    let consolidated = false;
 
-    const result = stmt.run(
-      content,
-      type,
-      tags ? JSON.stringify(tags) : null,
-      project || null,
-      importance,
-      metadata ? JSON.stringify(metadata) : null
-    );
+    try {
+      const existing = db.prepare(`
+        SELECT id, content, importance, access_count FROM memories
+        WHERE project = ? AND memory_type = ?
+        ORDER BY importance DESC, created_at DESC LIMIT 20
+      `).all(project || null, type) as Array<{
+        id: number; content: string; importance: number; access_count: number;
+      }>;
 
-    const memoryId = result.lastInsertRowid as number;
-
-    // 임베딩 생성 (비동기, 에러 무시)
-    generateEmbedding(content).then(embedding => {
-      if (embedding) {
-        try {
-          const embStmt = db.prepare(`
-            INSERT OR REPLACE INTO embeddings (memory_id, embedding)
-            VALUES (?, ?)
-          `);
-          embStmt.run(memoryId, embeddingToBuffer(embedding));
-          logger.debug('Embedding created', { memoryId }, 'memory_store');
-        } catch (e) {
-          logger.error('Embedding save failed', { memoryId, error: String(e) }, 'memory_store');
+      let mergeTarget: typeof existing[0] | null = null;
+      for (const row of existing) {
+        if (jaccardSimilarity(content, row.content) >= 0.6) {
+          mergeTarget = row;
+          break;
         }
       }
-    }).catch(() => { /* ignore */ });
+
+      if (mergeTarget) {
+        // 더 긴 content 채택, importance +1, access_count +1
+        const betterContent = content.length >= mergeTarget.content.length ? content : mergeTarget.content;
+        const newImportance = Math.min(10, mergeTarget.importance + 1);
+        db.prepare(`
+          UPDATE memories SET content = ?, importance = ?, access_count = access_count + 1,
+            accessed_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(betterContent, newImportance, mergeTarget.id);
+        memoryId = mergeTarget.id;
+        consolidated = true;
+      } else {
+        const result = db.prepare(`
+          INSERT INTO memories (content, memory_type, tags, project, importance, metadata)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(content, type, tags ? JSON.stringify(tags) : null, project || null, importance, metadata ? JSON.stringify(metadata) : null);
+        memoryId = result.lastInsertRowid as number;
+      }
+    } catch {
+      // Consolidation 실패 시 기존 방식 폴백
+      const result = db.prepare(`
+        INSERT INTO memories (content, memory_type, tags, project, importance, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(content, type, tags ? JSON.stringify(tags) : null, project || null, importance, metadata ? JSON.stringify(metadata) : null);
+      memoryId = result.lastInsertRowid as number;
+    }
+
+    // 임베딩 생성 (새 메모리만, 비동기)
+    if (!consolidated) {
+      generateEmbedding(content).then(embedding => {
+        if (embedding) {
+          try {
+            db.prepare(`INSERT OR REPLACE INTO embeddings (memory_id, embedding) VALUES (?, ?)`).run(memoryId, embeddingToBuffer(embedding));
+          } catch { /* ignore */ }
+        }
+      }).catch(() => { /* ignore */ });
+    }
 
     return {
       content: [{
@@ -149,7 +221,8 @@ export async function handleMemoryStore(args: unknown): Promise<CallToolResult> 
           id: memoryId,
           type,
           importance,
-          embeddingQueued: true
+          consolidated,
+          embeddingQueued: !consolidated
         })
       }]
     };
@@ -167,15 +240,15 @@ export async function handleMemorySearch(args: unknown): Promise<CallToolResult>
       };
     }
 
-    const { query, type, project, semantic, limit, minImportance } = parsed.data;
+    const { query, type, project, semantic, limit, minImportance, detail } = parsed.data;
 
     // 시맨틱 검색
     if (semantic) {
-      return performSemanticSearch(query, type, project, limit, minImportance);
+      return performSemanticSearch(query, type, project, limit, minImportance, detail);
     }
 
     // FTS 검색
-    return performFTSSearch(query, type, project, limit, minImportance);
+    return performFTSSearch(query, type, project, limit, minImportance, detail);
   }, args as Record<string, unknown>);
 }
 
@@ -184,7 +257,8 @@ async function performFTSSearch(
   type?: string,
   project?: string,
   limit: number = 10,
-  minImportance: number = 1
+  minImportance: number = 1,
+  detail: boolean = false
 ): Promise<CallToolResult> {
   const ftsQuery = query.split(/\s+/).filter(w => w.length > 1).join(' OR ');
 
@@ -207,8 +281,9 @@ async function performFTSSearch(
     params.push(project);
   }
 
+  // Fetch more rows for decay re-ranking
   sql += ` ORDER BY m.importance DESC, m.accessed_at DESC LIMIT ?`;
-  params.push(limit);
+  params.push(limit * 3);
 
   const stmt = db.prepare(sql);
   const rows = stmt.all(...params) as Array<{
@@ -222,22 +297,41 @@ async function performFTSSearch(
     access_count: number;
   }>;
 
+  // Decay 적용 후 re-rank
+  const scored = rows.map(row => ({
+    ...row,
+    decayedScore: calculateDecayedScore(row.importance, row.memory_type, row.created_at, row.access_count)
+  })).sort((a, b) => b.decayedScore - a.decayedScore).slice(0, limit);
+
   // 접근 카운트 업데이트
   const updateStmt = db.prepare(`
     UPDATE memories SET accessed_at = CURRENT_TIMESTAMP, access_count = access_count + 1
     WHERE id = ?
   `);
-  rows.forEach(row => updateStmt.run(row.id));
+  scored.forEach(row => updateStmt.run(row.id));
 
-  const memories = rows.map(row => ({
-    id: row.id,
-    content: row.content.length > 300 ? row.content.slice(0, 300) + '...' : row.content,
-    type: row.memory_type,
-    tags: parseTags(row.tags),
-    project: row.project,
-    importance: row.importance,
-    createdAt: row.created_at
-  }));
+  const memories = scored.map(row => {
+    if (detail) {
+      return {
+        id: row.id,
+        content: row.content.length > 300 ? row.content.slice(0, 300) + '...' : row.content,
+        type: row.memory_type,
+        tags: parseTags(row.tags),
+        project: row.project,
+        importance: row.importance,
+        createdAt: row.created_at
+      };
+    }
+    // Progressive disclosure: index-only mode (~50 tokens per result)
+    return {
+      id: row.id,
+      summary: row.content.slice(0, 80) + (row.content.length > 80 ? '...' : ''),
+      type: row.memory_type,
+      tags: parseTags(row.tags),
+      importance: row.importance,
+      createdAt: row.created_at
+    };
+  });
 
   return {
     content: [{
@@ -246,6 +340,7 @@ async function performFTSSearch(
         query,
         searchType: 'fts',
         found: memories.length,
+        hint: detail ? undefined : 'Use memory_get({ ids: [...] }) to fetch full content',
         memories
       }, null, 2)
     }]
@@ -257,7 +352,8 @@ async function performSemanticSearch(
   type?: string,
   project?: string,
   limit: number = 10,
-  minImportance: number = 1
+  minImportance: number = 1,
+  detail: boolean = false
 ): Promise<CallToolResult> {
   // 쿼리 임베딩 생성
   const queryEmbedding = await generateEmbedding(query);
@@ -316,16 +412,28 @@ async function performSemanticSearch(
   `);
   scored.forEach(row => updateStmt.run(row.id));
 
-  const memories = scored.map(row => ({
-    id: row.id,
-    content: row.content.length > 300 ? row.content.slice(0, 300) + '...' : row.content,
-    type: row.memory_type,
-    tags: parseTags(row.tags),
-    project: row.project,
-    importance: row.importance,
-    similarity: Math.round(row.similarity * 100) / 100,
-    createdAt: row.created_at
-  }));
+  const memories = scored.map(row => {
+    if (detail) {
+      return {
+        id: row.id,
+        content: row.content.length > 300 ? row.content.slice(0, 300) + '...' : row.content,
+        type: row.memory_type,
+        tags: parseTags(row.tags),
+        project: row.project,
+        importance: row.importance,
+        similarity: Math.round(row.similarity * 100) / 100,
+        createdAt: row.created_at
+      };
+    }
+    return {
+      id: row.id,
+      summary: row.content.slice(0, 80) + (row.content.length > 80 ? '...' : ''),
+      type: row.memory_type,
+      importance: row.importance,
+      similarity: Math.round(row.similarity * 100) / 100,
+      createdAt: row.created_at
+    };
+  });
 
   return {
     content: [{
@@ -334,10 +442,61 @@ async function performSemanticSearch(
         query,
         searchType: 'semantic',
         found: memories.length,
+        hint: detail ? undefined : 'Use memory_get({ ids: [...] }) to fetch full content',
         memories
       }, null, 2)
     }]
   };
+}
+
+export async function handleMemoryGet(args: unknown): Promise<CallToolResult> {
+  return logger.withTool('memory_get', async () => {
+    const parsed = MemoryGetSchema.safeParse(args);
+    if (!parsed.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Validation error: ${parsed.error.message}` }],
+        isError: true
+      };
+    }
+
+    const { ids } = parsed.data;
+    const placeholders = ids.map(() => '?').join(',');
+
+    const rows = db.prepare(`
+      SELECT id, content, memory_type, tags, project, importance, created_at, access_count, metadata
+      FROM memories WHERE id IN (${placeholders})
+    `).all(...ids) as Array<{
+      id: number; content: string; memory_type: string; tags: string | null;
+      project: string | null; importance: number; created_at: string;
+      access_count: number; metadata: string | null;
+    }>;
+
+    // access_count 증가
+    const updateStmt = db.prepare(`
+      UPDATE memories SET accessed_at = CURRENT_TIMESTAMP, access_count = access_count + 1
+      WHERE id = ?
+    `);
+    rows.forEach(row => updateStmt.run(row.id));
+
+    const memories = rows.map(row => ({
+      id: row.id,
+      content: row.content,
+      type: row.memory_type,
+      tags: parseTags(row.tags),
+      project: row.project,
+      importance: row.importance,
+      accessCount: row.access_count + 1,
+      createdAt: row.created_at,
+      metadata: row.metadata ? JSON.parse(row.metadata) : null
+    }));
+
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({ found: memories.length, memories }, null, 2)
+      }]
+    };
+  }, args as Record<string, unknown>);
 }
 
 export async function handleMemoryDelete(args: unknown): Promise<CallToolResult> {

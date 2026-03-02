@@ -110,26 +110,17 @@ function loadContext(dbPath: string, project: string): string | null {
     if (recentSessions.length > 0) {
       lines.push('## Recent Sessions');
       for (const session of recentSessions) {
-        lines.push(`### ${session.timestamp?.slice(0, 10) || 'unknown'}`);
-        lines.push(`**Work**: ${session.last_work}`);
+        // last_work 60자 제한 (토큰 예산)
+        const work = session.last_work.length > 60 ? session.last_work.slice(0, 60) + '...' : session.last_work;
+        lines.push(`- [${session.timestamp?.slice(0, 10) || '?'}] ${work}`);
 
-        // 구조화 메타데이터 파싱 (session-end v2에서 저장)
+        // 커밋 정보 (간결하게)
         if (session.issues) {
           try {
             const meta = JSON.parse(session.issues);
             if (meta.commits?.length > 0) {
-              lines.push(`**Commits**: ${meta.commits.slice(0, 3).join('; ')}`);
+              lines.push(`  commits: ${meta.commits.slice(0, 2).join('; ').slice(0, 80)}`);
             }
-            if (meta.decisions?.length > 0) {
-              lines.push(`**Decisions**: ${meta.decisions.join('; ')}`);
-            }
-          } catch { /* plain text issues or empty, skip */ }
-        }
-
-        if (session.next_tasks) {
-          try {
-            const next = JSON.parse(session.next_tasks);
-            if (next.length > 0) lines.push(`**Next**: ${next.slice(0, 2).join(', ')}`);
           } catch { /* skip */ }
         }
       }
@@ -140,7 +131,7 @@ function loadContext(dbPath: string, project: string): string | null {
     try {
       const directives = db.prepare(`
         SELECT directive, priority FROM user_directives
-        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
+        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 5
       `).all(project) as Array<{ directive: string; priority: string }>;
 
       if (directives.length > 0) {
@@ -171,31 +162,53 @@ function loadContext(dbPath: string, project: string): string | null {
       }
     } catch { /* table may not exist */ }
 
-    // 중요 메모리 (노이즈 필터링)
+    // 중요 메모리 (temporal decay 적용)
     try {
       const memories = db.prepare(`
-        SELECT content, memory_type FROM memories
+        SELECT content, memory_type, importance, created_at, access_count FROM memories
         WHERE project = ?
           AND memory_type IN ('decision', 'learning', 'error', 'preference')
-          AND importance >= 5
+          AND importance >= 3
           AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL)
           AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)
-        ORDER BY importance DESC, accessed_at DESC LIMIT 5
-      `).all(project) as Array<{ content: string; memory_type: string }>;
+        ORDER BY importance DESC, accessed_at DESC LIMIT 20
+      `).all(project) as Array<{ content: string; memory_type: string; importance: number; created_at: string; access_count: number }>;
 
       if (memories.length > 0) {
+        // Decay 적용 후 top 5 선택
+        const DECAY_RATES: Record<string, number> = {
+          decision: 0.001, learning: 0.003, error: 0.01, preference: 0.002
+        };
+        const scored = memories.map(m => {
+          const ageDays = (Date.now() - new Date(m.created_at).getTime()) / (1000 * 60 * 60 * 24);
+          const decayRate = DECAY_RATES[m.memory_type] ?? 0.005;
+          const score = m.importance * Math.exp(-decayRate * ageDays) * Math.log2(m.access_count + 2);
+          return { ...m, score };
+        }).sort((a, b) => b.score - a.score).slice(0, 5);
+
         const typeIcons: Record<string, string> = {
           decision: '🎯', learning: '📚', error: '⚠️', preference: '💡'
         };
         lines.push('## Key Memories');
-        for (const m of memories) {
+        for (const m of scored) {
           const icon = typeIcons[m.memory_type] || '💭';
-          const content = m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content;
+          const content = m.content.length > 80 ? m.content.slice(0, 80) + '...' : m.content;
           lines.push(`- ${icon} ${content}`);
         }
         lines.push('');
       }
     } catch { /* ignore */ }
+
+    // 솔루션 통계 (1줄)
+    try {
+      const solCount = (db.prepare(
+        'SELECT COUNT(*) as cnt FROM solutions WHERE project = ?'
+      ).get(project) as { cnt: number })?.cnt || 0;
+      if (solCount > 0) {
+        lines.push(`Solutions: ${solCount} recorded (auto-injected on error)`);
+        lines.push('');
+      }
+    } catch { /* solutions table may not exist */ }
 
     db.close();
 

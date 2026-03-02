@@ -10,7 +10,7 @@
  * 3. 태스크/백로그 (4개): task_add, task_update, task_list, task_suggest
  * 4. 솔루션 아카이브 (3개): solution_record, solution_find, solution_suggest
  * 5. 검증/품질 (3개): verify_build, verify_test, verify_all
- * 6. 메모리 시스템 (4개): memory_store, memory_search, memory_related, memory_stats
+ * 6. 메모리 시스템 (5개): memory_store, memory_search, memory_get, memory_related, memory_stats
  * 7. 지식 그래프 (2개): graph_connect, graph_explore
  * 8. 자동 주입 (Prompts): project-context, recent-memories, error-solutions
  */
@@ -672,7 +672,7 @@ const tools: Tool[] = [
   },
   {
     name: 'memory_search',
-    description: '메모리를 검색합니다. 키워드, 시맨틱, 타입별, 태그별 검색 지원.',
+    description: '메모리를 검색합니다. 기본은 인덱스만 반환 (토큰 절약). detail=true로 전체 내용 확인.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -686,9 +686,21 @@ const tools: Tool[] = [
         tags: { type: 'array', items: { type: 'string' }, description: '태그 필터 (선택)' },
         semantic: { type: 'boolean', description: '시맨틱 검색 사용 (기본: false, 임베딩 기반)' },
         minImportance: { type: 'number', description: '최소 중요도 (기본: 1)' },
-        limit: { type: 'number', description: '결과 개수 (기본: 10)' }
+        limit: { type: 'number', description: '결과 개수 (기본: 10)' },
+        detail: { type: 'boolean', description: 'true면 전체 content, false면 요약 인덱스만 (기본: false)' }
       },
       required: ['query']
+    }
+  },
+  {
+    name: 'memory_get',
+    description: '메모리 ID로 전체 내용을 조회합니다. memory_search 결과에서 상세 내용 확인 시 사용.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'number' }, description: '조회할 메모리 ID 배열 (최대 20개)' }
+      },
+      required: ['ids']
     }
   },
   {
@@ -1722,6 +1734,44 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
               found: formatted.length,
               results: formatted
             }, null, 2)
+          }]
+        };
+      }
+
+      case 'memory_get': {
+        const ids = args.ids as number[];
+        if (!ids || ids.length === 0) {
+          return { content: [{ type: 'text', text: 'ids 배열이 필요합니다.' }] };
+        }
+        const placeholders = ids.map(() => '?').join(',');
+        const memRows = db.prepare(`
+          SELECT id, content, memory_type, tags, project, importance, created_at, access_count, metadata
+          FROM memories WHERE id IN (${placeholders})
+        `).all(...ids) as Array<Record<string, unknown>>;
+
+        // access_count 업데이트
+        if (memRows.length > 0) {
+          db.prepare(`
+            UPDATE memories SET accessed_at = datetime('now'), access_count = access_count + 1
+            WHERE id IN (${memRows.map(r => r.id).join(',')})
+          `).run();
+        }
+
+        const memResults = memRows.map(row => ({
+          id: row.id,
+          content: row.content,
+          type: row.memory_type,
+          project: row.project || 'global',
+          tags: parseTags(row.tags as string),
+          importance: row.importance,
+          accessCount: (row.access_count as number) + 1,
+          createdAt: row.created_at
+        }));
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ found: memResults.length, memories: memResults }, null, 2)
           }]
         };
       }
