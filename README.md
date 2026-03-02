@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.12.0)
+# claude-session-continuity-mcp (v1.12.1)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search + auto error→solution pipeline
 
