@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.12.1)
+# claude-session-continuity-mcp (v1.13.0)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search + auto error→solution pipeline
 
@@ -6,6 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen.svg)]()
 [![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)]()
+[![claude-session-continuity-mcp MCP server](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp/badges/card.svg)](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp)
 
 ## The Problem
 

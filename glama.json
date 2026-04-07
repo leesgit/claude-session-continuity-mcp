@@ -1,0 +1,55 @@
+{
+  "name": "claude-session-continuity-mcp",
+  "display_name": "Claude Session Continuity MCP",
+  "description": "Zero Re-explanation Session Continuity for Claude Code. Automatic context capture + semantic search + auto error-to-solution pipeline using Claude Hooks.",
+  "repository": "https://github.com/leesgit/claude-session-continuity-mcp",
+  "homepage": "https://www.npmjs.com/package/claude-session-continuity-mcp",
+  "license": "MIT",
+  "runtime": "node",
+  "mcpServers": {
+    "claude-session-continuity-mcp": {
+      "command": "npx",
+      "args": ["-y", "claude-session-continuity-mcp"]
+    }
+  },
+  "tools": [
+    "session_start",
+    "session_end",
+    "session_history",
+    "search_sessions",
+    "memory_store",
+    "memory_search",
+    "memory_get",
+    "memory_related",
+    "memory_stats",
+    "solution_record",
+    "solution_find",
+    "solution_suggest",
+    "project_init",
+    "project_status",
+    "project_analyze",
+    "list_projects",
+    "task_add",
+    "task_list",
+    "task_update",
+    "task_suggest",
+    "graph_connect",
+    "graph_explore",
+    "verify_build",
+    "verify_test",
+    "verify_all"
+  ],
+  "categories": [
+    "Knowledge & Memory",
+    "Developer Tools"
+  ],
+  "tags": [
+    "claude-code",
+    "session-management",
+    "memory",
+    "context-continuity",
+    "developer-tools",
+    "mcp",
+    "hooks"
+  ]
+}
