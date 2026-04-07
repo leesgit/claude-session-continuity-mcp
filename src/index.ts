@@ -30,12 +30,22 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import Database from 'better-sqlite3';
 
-// @ts-ignore - transformers.js
-import { pipeline, env } from '@xenova/transformers';
+// @xenova/transformers - 동적 import (sharp 의존성 문제 방지)
+let transformersModule: { pipeline: unknown; env: Record<string, unknown> } | null = null;
 
-// 모델 캐시 설정
-env.cacheDir = path.join(process.env.HOME || '/tmp', '.cache', 'transformers');
-env.allowLocalModels = true;
+async function loadTransformers() {
+  if (transformersModule) return transformersModule;
+  try {
+    // @ts-ignore - transformers.js
+    const mod = await import('@xenova/transformers');
+    mod.env.cacheDir = path.join(process.env.HOME || '/tmp', '.cache', 'transformers');
+    mod.env.allowLocalModels = true;
+    transformersModule = mod;
+    return mod;
+  } catch {
+    return null;
+  }
+}
 
 // 기본 경로 설정 (자동 감지)
 function detectWorkspaceRoot(): string {
@@ -253,7 +263,9 @@ let embeddingPipeline: unknown = null;
 async function initEmbedding() {
   if (embeddingPipeline) return;
   try {
-    embeddingPipeline = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small');
+    const mod = await loadTransformers();
+    if (!mod) return;
+    embeddingPipeline = await (mod.pipeline as Function)('feature-extraction', 'Xenova/multilingual-e5-small');
   } catch (error) {
     console.error('Failed to load embedding model:', error);
   }
@@ -297,6 +309,29 @@ function cosineSimilarity(a: number[], b: number[]): number {
     normB += b[i] * b[i];
   }
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// ===== 임베딩 저장 (재시도 포함) =====
+
+async function storeEmbeddingWithRetry(
+  db: ReturnType<typeof Database>,
+  entityType: string,
+  entityId: number | bigint,
+  text: string,
+  retries = 2
+): Promise<void> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const embedding = await generateEmbedding(text, 'passage');
+      if (embedding) {
+        const buffer = Buffer.from(new Float32Array(embedding).buffer);
+        db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)')
+          .run(entityType, entityId, buffer);
+        return;
+      }
+    } catch { /* retry */ }
+    if (attempt < retries) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+  }
 }
 
 // ===== 유틸리티 함수 =====
@@ -974,9 +1009,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
         const sessions = db.prepare(`
           SELECT * FROM sessions
-          WHERE project = ? AND timestamp > datetime('now', '-${days} days')
+          WHERE project = ? AND timestamp > datetime('now', '-' || ? || ' days')
           ORDER BY timestamp DESC LIMIT ?
-        `).all(project, limit) as Array<Record<string, unknown>>;
+        `).all(project, days, limit) as Array<Record<string, unknown>>;
 
         return {
           content: [{
@@ -1019,11 +1054,29 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           project
             ? 'SELECT * FROM sessions WHERE project = ? ORDER BY timestamp DESC LIMIT 100'
             : 'SELECT * FROM sessions ORDER BY timestamp DESC LIMIT 100'
-        ).all(project ? [project] : []) as Array<Record<string, unknown>>;
+        ).all(...(project ? [project] : [])) as Array<Record<string, unknown>>;
 
+        // 사전 캐시된 임베딩 활용 (없으면 on-the-fly 생성 후 캐시)
         const scored = await Promise.all(allSessions.map(async (s) => {
-          const text = `${s.last_work} ${s.current_status || ''}`;
-          const emb = await generateEmbedding(text, 'passage');
+          const sessionId = s.id as number;
+          // 캐시된 임베딩 확인
+          const cached = db.prepare(
+            'SELECT embedding FROM embeddings_v4 WHERE entity_type = ? AND entity_id = ?'
+          ).get('session', sessionId) as { embedding: Buffer } | undefined;
+
+          let emb: number[] | null = null;
+          if (cached?.embedding) {
+            emb = Array.from(new Float32Array(cached.embedding.buffer, cached.embedding.byteOffset, cached.embedding.byteLength / 4));
+          } else {
+            const text = `${s.last_work} ${s.current_status || ''}`;
+            emb = await generateEmbedding(text, 'passage');
+            // 생성 성공 시 캐시 저장
+            if (emb) {
+              const buffer = Buffer.from(new Float32Array(emb).buffer);
+              db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)')
+                .run('session', sessionId, buffer);
+            }
+          }
           const similarity = emb ? cosineSimilarity(queryEmbedding, emb) : 0;
           return { ...s, similarity };
         }));
@@ -1323,13 +1376,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           keywords
         );
 
-        // 임베딩 저장 (시맨틱 검색용) - embeddings_v4 사용
-        generateEmbedding(`${errorSignature} ${errorMessage || ''} ${solution}`, 'passage').then(embedding => {
-          if (embedding) {
-            const buffer = Buffer.from(new Float32Array(embedding).buffer);
-            db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)').run('solution', result.lastInsertRowid, buffer);
-          }
-        }).catch(() => {});
+        // 임베딩 저장 (시맨틱 검색용, 재시도 포함)
+        storeEmbeddingWithRetry(db, 'solution', result.lastInsertRowid, `${errorSignature} ${errorMessage || ''} ${solution}`);
 
         return {
           content: [{
@@ -1605,13 +1653,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
         const memoryId = result.lastInsertRowid as number;
 
-        // 임베딩 생성 (비동기)
-        generateEmbedding(content, 'passage').then(embedding => {
-          if (embedding) {
-            const buffer = Buffer.from(new Float32Array(embedding).buffer);
-            db.prepare('INSERT OR REPLACE INTO embeddings_v4 (entity_type, entity_id, embedding) VALUES (?, ?, ?)').run('memory', memoryId, buffer);
-          }
-        }).catch(() => {});
+        // 임베딩 생성 (재시도 포함)
+        storeEmbeddingWithRetry(db, 'memory', memoryId, content);
 
         // 관계 자동 생성
         if (relatedTo) {
@@ -1886,13 +1929,13 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           project
             ? 'SELECT COUNT(*) as count FROM memories WHERE project = ?'
             : 'SELECT COUNT(*) as count FROM memories'
-        ).get(project ? [project] : []) as { count: number }).count;
+        ).get(...(project ? [project] : [])) as { count: number }).count;
 
         const byType = db.prepare(
           project
             ? 'SELECT memory_type as type, COUNT(*) as count FROM memories WHERE project = ? GROUP BY memory_type'
             : 'SELECT memory_type as type, COUNT(*) as count FROM memories GROUP BY memory_type'
-        ).all(project ? [project] : []) as Array<{ type: string; count: number }>;
+        ).all(...(project ? [project] : [])) as Array<{ type: string; count: number }>;
 
         const byProject = db.prepare(`
           SELECT COALESCE(project, 'global') as project, COUNT(*) as count
@@ -1911,14 +1954,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           FROM memories
           ${project ? 'WHERE project = ?' : ''}
           ORDER BY created_at DESC LIMIT 5
-        `).all(project ? [project] : []) as Array<Record<string, unknown>>;
+        `).all(...(project ? [project] : [])) as Array<Record<string, unknown>>;
 
         const topAccessedMemories = db.prepare(`
           SELECT id, memory_type, content, access_count
           FROM memories
           ${project ? 'WHERE project = ?' : ''}
           ORDER BY access_count DESC LIMIT 5
-        `).all(project ? [project] : []) as Array<Record<string, unknown>>;
+        `).all(...(project ? [project] : [])) as Array<Record<string, unknown>>;
 
         return {
           content: [{
