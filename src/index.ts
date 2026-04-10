@@ -452,54 +452,54 @@ const tools: Tool[] = [
   // ===== 1. 세션/컨텍스트 (4개) =====
   {
     name: 'session_start',
-    description: '세션 시작 시 프로젝트 컨텍스트를 로드합니다. Hook에서 자동 호출되지만 수동 호출도 가능합니다.',
+    description: 'Load project context at the beginning of a session. Typically auto-invoked by the SessionStart hook, but can be called manually. Returns the project\'s tech stack, recent activity, pending tasks, and active blockers as a compressed context payload (~650 tokens). Read-only — does not modify any state. Use this instead of project_status when you need the full session bootstrap context.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        compact: { type: 'boolean', description: '간결한 포맷 (기본: true)' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        compact: { type: 'boolean', description: 'Return compressed format (default: true). Set false for verbose output.' }
       },
       required: ['project']
     }
   },
   {
     name: 'session_end',
-    description: '세션 종료 시 현재 상태를 저장합니다. 다음 세션에서 자동 복구됩니다.',
+    description: 'Save the current session state before ending a conversation. Persists a summary, completed work, next steps, modified files, and blockers to SQLite. The saved state is automatically restored by session_start in the next session. Side effects: writes to the sessions table and updates the active_context record for the project. Idempotent — calling multiple times overwrites the previous session record.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        summary: { type: 'string', description: '이번 세션 요약 (1-2줄)' },
-        workDone: { type: 'string', description: '완료한 작업' },
-        nextSteps: { type: 'array', items: { type: 'string' }, description: '다음 할 일' },
-        modifiedFiles: { type: 'array', items: { type: 'string' }, description: '수정한 파일' },
-        blockers: { type: 'string', description: '막힌 것/이슈' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        summary: { type: 'string', description: 'One-line summary of this session' },
+        workDone: { type: 'string', description: 'Description of completed work' },
+        nextSteps: { type: 'array', items: { type: 'string' }, description: 'Ordered list of next tasks to pick up' },
+        modifiedFiles: { type: 'array', items: { type: 'string' }, description: 'Files modified during this session' },
+        blockers: { type: 'string', description: 'Current blockers or issues (null if none)' }
       },
       required: ['project', 'summary']
     }
   },
   {
     name: 'session_history',
-    description: '프로젝트의 세션 이력을 조회합니다.',
+    description: 'Retrieve past session records for a project. Returns an array of session objects ordered by most recent first, each containing summary, work done, modified files, and verification results. Read-only. Use search_sessions instead when you need semantic/keyword matching rather than a chronological list.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        limit: { type: 'number', description: '조회 개수 (기본: 5)' },
-        days: { type: 'number', description: '최근 N일 (기본: 7)' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        limit: { type: 'number', description: 'Max records to return (default: 5)' },
+        days: { type: 'number', description: 'Only return sessions from the last N days (default: 7)' }
       },
       required: ['project']
     }
   },
   {
     name: 'search_sessions',
-    description: '세션 이력을 시맨틱 검색합니다. "저번에 인증 작업했을 때" 같은 검색에 유용합니다.',
+    description: 'Semantic search across session history using multilingual embeddings (94+ languages). Finds past sessions by meaning, not just keywords — e.g. "when I worked on authentication" matches sessions about login, OAuth, JWT. Falls back to FTS5 keyword search when embeddings are unavailable. Read-only. Use session_history instead when you just need the N most recent sessions.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '검색어' },
-        project: { type: 'string', description: '프로젝트 (선택)' },
-        limit: { type: 'number', description: '결과 개수 (기본: 5)' }
+        query: { type: 'string', description: 'Natural language search query' },
+        project: { type: 'string', description: 'Filter by project (optional)' },
+        limit: { type: 'number', description: 'Max results to return (default: 5)' }
       },
       required: ['query']
     }
@@ -508,42 +508,42 @@ const tools: Tool[] = [
   // ===== 2. 프로젝트 관리 (4개) =====
   {
     name: 'project_status',
-    description: '프로젝트 진행 현황을 조회합니다. 완성도, 태스크, 최근 변경 등.',
+    description: 'Get a project\'s current status including completion percentage, task breakdown (pending/in-progress/done/blocked), recent session activity, and active blockers. Read-only. Returns a structured JSON object. Use session_start instead when bootstrapping a new conversation; use this for mid-session status checks.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' }
       },
       required: ['project']
     }
   },
   {
     name: 'project_init',
-    description: '새 프로젝트를 초기화합니다. 컨텍스트 테이블에 기본 정보를 저장합니다.',
+    description: 'Initialize a new project in the continuity system. Creates records in the project_context and active_context tables. Auto-detects tech stack from package.json/pubspec.yaml/build.gradle if present. Side effects: writes to SQLite. Idempotent — safe to call on an already-initialized project (updates existing record). Call this once when adding a new project, then use session_start for subsequent sessions.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        techStack: { type: 'object', description: '기술 스택 (자동 감지 가능)' },
-        description: { type: 'string', description: '프로젝트 설명' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        techStack: { type: 'object', description: 'Tech stack override {framework, language, database, ...}. Omit for auto-detection.' },
+        description: { type: 'string', description: 'Human-readable project description' }
       },
       required: ['project']
     }
   },
   {
     name: 'project_analyze',
-    description: '프로젝트를 분석하여 기술 스택, 구조 등을 자동 감지합니다.',
+    description: 'Auto-detect a project\'s tech stack, framework, platform (Web/Android/Flutter/Server), directory structure, and dependency count by scanning its files. Read-only — does not persist results. Returns a structured analysis object. Use project_init to persist the detected configuration.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' }
       },
       required: ['project']
     }
   },
   {
     name: 'list_projects',
-    description: 'apps/ 디렉토리의 모든 프로젝트 목록을 반환합니다.',
+    description: 'List all projects under the apps/ directory with their platform type (Web/Android/Flutter), initialization status, and whether session context exists. Read-only. Returns an array of project summary objects. No parameters required.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -553,52 +553,52 @@ const tools: Tool[] = [
   // ===== 3. 태스크/백로그 (4개) =====
   {
     name: 'task_add',
-    description: '새 태스크를 추가합니다.',
+    description: 'Add a new task to a project\'s backlog. Tasks are persisted in SQLite with priority ranking and optional file associations. Side effects: inserts into the tasks table. Returns the created task ID. Use task_list to view existing tasks before adding duplicates. Use task_suggest to auto-generate tasks from code comments (TODO/FIXME).',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        title: { type: 'string', description: '태스크 제목' },
-        description: { type: 'string', description: '상세 설명' },
-        priority: { type: 'number', description: '우선순위 1-10 (기본: 5)' },
-        relatedFiles: { type: 'array', items: { type: 'string' }, description: '관련 파일' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        title: { type: 'string', description: 'Task title (concise, actionable)' },
+        description: { type: 'string', description: 'Detailed description (optional)' },
+        priority: { type: 'number', description: 'Priority 1-10 where 10 is highest (default: 5)' },
+        relatedFiles: { type: 'array', items: { type: 'string' }, description: 'Associated file paths (optional)' }
       },
       required: ['project', 'title']
     }
   },
   {
     name: 'task_update',
-    description: '태스크 상태를 변경합니다.',
+    description: 'Update a task\'s status. Valid transitions: pending → in_progress → done, or any state → blocked. Setting status to "done" automatically records a completion timestamp. Side effects: updates the tasks table. Idempotent. Returns success/failure and whether the row was actually modified.',
     inputSchema: {
       type: 'object',
       properties: {
-        taskId: { type: 'number', description: '태스크 ID' },
-        status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'], description: '새 상태' },
-        note: { type: 'string', description: '메모 (완료 시 결과 등)' }
+        taskId: { type: 'number', description: 'Task ID (from task_add or task_list)' },
+        status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'], description: 'New status' },
+        note: { type: 'string', description: 'Optional note (e.g. completion summary or block reason)' }
       },
       required: ['taskId', 'status']
     }
   },
   {
     name: 'task_list',
-    description: '프로젝트의 태스크 목록을 조회합니다.',
+    description: 'List tasks for a project, filtered by status. Returns an array of task objects with id, title, description, status, priority, related files, and timestamps, plus a summary count by status. Read-only. Default filter is "pending" — pass status="all" to see everything.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        status: { type: 'string', enum: ['all', 'pending', 'in_progress', 'done', 'blocked'], description: '필터 (기본: pending)' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        status: { type: 'string', enum: ['all', 'pending', 'in_progress', 'done', 'blocked'], description: 'Status filter (default: "pending")' }
       },
       required: ['project']
     }
   },
   {
     name: 'task_suggest',
-    description: '코드 분석 기반으로 TODO, FIXME 등에서 태스크를 추출하여 제안합니다.',
+    description: 'Scan project source files for TODO, FIXME, HACK, and XXX comments and return them as suggested tasks. Read-only — does not create tasks automatically. Review the suggestions and use task_add to persist the ones you want. Optionally scope the scan to a specific subdirectory.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        path: { type: 'string', description: '특정 경로만 분석 (선택)' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        path: { type: 'string', description: 'Subdirectory path to limit the scan (optional, e.g. "src/components")' }
       },
       required: ['project']
     }
@@ -607,41 +607,41 @@ const tools: Tool[] = [
   // ===== 4. 솔루션 아카이브 (3개) =====
   {
     name: 'solution_record',
-    description: '에러 해결 방법을 기록합니다. 나중에 같은 에러 발생 시 자동 검색됩니다.',
+    description: 'Record an error-solution pair in the solution archive. Associates an error signature (the searchable key), optional full error message, the fix, and related files. Automatically extracts keywords for FTS5 indexing. Side effects: inserts into the solutions table. Use solution_find to check for existing solutions before recording a duplicate.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        errorSignature: { type: 'string', description: '에러 패턴/시그니처 (검색 키)' },
-        errorMessage: { type: 'string', description: '전체 에러 메시지' },
-        solution: { type: 'string', description: '해결 방법' },
-        relatedFiles: { type: 'array', items: { type: 'string' }, description: '관련 파일' }
+        project: { type: 'string', description: 'Project name (optional — omit for cross-project solutions)' },
+        errorSignature: { type: 'string', description: 'Error pattern/signature used as the search key (e.g. "ENOENT: no such file", "WorkManager not initialized")' },
+        errorMessage: { type: 'string', description: 'Full error message or stack trace (optional)' },
+        solution: { type: 'string', description: 'Step-by-step fix description' },
+        relatedFiles: { type: 'array', items: { type: 'string' }, description: 'Files that were modified to fix the error' }
       },
       required: ['errorSignature', 'solution']
     }
   },
   {
     name: 'solution_find',
-    description: '유사한 에러의 해결 방법을 검색합니다. semantic=true로 시맨틱 검색 가능.',
+    description: 'Search the solution archive for previously resolved errors. Matches against error signatures, messages, and keywords using FTS5. Set semantic=true to enable embedding-based similarity search for better recall across different error phrasings. Read-only. Returns matched solutions with their fix descriptions and related files. Use solution_suggest instead if you want AI-powered fix recommendations.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '에러 메시지 또는 키워드' },
-        project: { type: 'string', description: '프로젝트 (선택)' },
-        limit: { type: 'number', description: '결과 개수 (기본: 3)' },
-        semantic: { type: 'boolean', description: '시맨틱 검색 사용 (기본: false, 임베딩 기반)' }
+        query: { type: 'string', description: 'Error message, signature, or natural language description of the problem' },
+        project: { type: 'string', description: 'Filter by project (optional — also includes cross-project solutions)' },
+        limit: { type: 'number', description: 'Max results to return (default: 3)' },
+        semantic: { type: 'boolean', description: 'Enable semantic/embedding search for fuzzy matching (default: false)' }
       },
       required: ['query']
     }
   },
   {
     name: 'solution_suggest',
-    description: '과거 솔루션 기반으로 현재 에러에 대한 해결책을 AI가 제안합니다.',
+    description: 'Get AI-powered fix suggestions for a current error based on the solution archive. Retrieves the most relevant past solutions and generates a contextual recommendation. Read-only. Use solution_find for direct archive lookup without AI synthesis; use solution_record after fixing an error to grow the archive.',
     inputSchema: {
       type: 'object',
       properties: {
-        errorMessage: { type: 'string', description: '현재 에러 메시지' },
-        project: { type: 'string', description: '프로젝트' }
+        errorMessage: { type: 'string', description: 'The current error message or stack trace' },
+        project: { type: 'string', description: 'Project name for context (optional)' }
       },
       required: ['errorMessage']
     }
@@ -650,35 +650,35 @@ const tools: Tool[] = [
   // ===== 5. 검증/품질 (3개) =====
   {
     name: 'verify_build',
-    description: '프로젝트 빌드를 실행합니다.',
+    description: 'Run the project\'s build command (auto-detected per platform: "pnpm build" for Web, "flutter build" for Flutter, "./gradlew assembleDebug" for Android). Side effects: executes a shell command in the project directory with a 5-minute timeout. Returns {success, output} with the last 1000 chars of stdout/stderr. Use verify_all to run build + test + lint together.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' }
       },
       required: ['project']
     }
   },
   {
     name: 'verify_test',
-    description: '프로젝트 테스트를 실행합니다.',
+    description: 'Run the project\'s test suite (auto-detected per platform: "pnpm test:run" for Web, "flutter test" for Flutter, "./gradlew test" for Android). Optionally scope to a specific test file or directory. Side effects: executes a shell command with a 5-minute timeout. Returns {success, output}. Use verify_all to run build + test + lint together.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        testPath: { type: 'string', description: '특정 테스트 파일/폴더 (선택)' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        testPath: { type: 'string', description: 'Specific test file or directory to run (optional — runs all tests if omitted)' }
       },
       required: ['project']
     }
   },
   {
     name: 'verify_all',
-    description: '빌드 + 테스트 + 린트를 한 번에 실행합니다.',
+    description: 'Run build, test, and lint sequentially for a project. Auto-detects platform-specific commands. Side effects: executes up to 3 shell commands with 5-minute timeouts each. Returns per-gate results and an overall pass/fail status. Use this as a quality gate before committing or ending a session. Use verify_build or verify_test individually when you only need one check.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '프로젝트 이름' },
-        stopOnFail: { type: 'boolean', description: '실패 시 중단 (기본: false)' }
+        project: { type: 'string', description: 'Project name (must match a directory under apps/)' },
+        stopOnFail: { type: 'boolean', description: 'Abort remaining gates on first failure (default: false — runs all gates)' }
       },
       required: ['project']
     }
@@ -687,78 +687,78 @@ const tools: Tool[] = [
   // ===== 6. 메모리 시스템 (4개) - v4 신규 =====
   {
     name: 'memory_store',
-    description: '메모리를 저장합니다. 타입별로 분류되어 나중에 체계적으로 검색 가능합니다.',
+    description: 'Store a piece of knowledge in the memory system. Memories are typed (observation, decision, learning, error, pattern), tagged, and automatically embedded for semantic retrieval. Side effects: inserts into the memories table and asynchronously generates a vector embedding. If relatedTo is provided, also creates a knowledge graph edge. Returns the new memory ID. Use memory_search to verify no duplicate exists before storing.',
     inputSchema: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: '저장할 내용' },
+        content: { type: 'string', description: 'The knowledge content to store' },
         type: {
           type: 'string',
           enum: ['observation', 'decision', 'learning', 'error', 'pattern'],
-          description: '메모리 타입: observation(발견), decision(결정), learning(학습), error(에러), pattern(패턴)'
+          description: 'Memory type: observation (discovery/finding), decision (architecture/tech choice), learning (new knowledge), error (error encountered), pattern (code convention)'
         },
-        project: { type: 'string', description: '관련 프로젝트 (선택)' },
-        tags: { type: 'array', items: { type: 'string' }, description: '태그 (검색용)' },
-        importance: { type: 'number', description: '중요도 1-10 (기본: 5)' },
-        relatedTo: { type: 'number', description: '연결할 기존 메모리 ID (선택)' }
+        project: { type: 'string', description: 'Associated project name (optional — omit for cross-project knowledge)' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for filtering (e.g. ["auth", "performance"])' },
+        importance: { type: 'number', description: 'Importance score 1-10 where 10 is critical (default: 5)' },
+        relatedTo: { type: 'number', description: 'ID of an existing memory to link via knowledge graph (optional)' }
       },
       required: ['content', 'type']
     }
   },
   {
     name: 'memory_search',
-    description: '메모리를 검색합니다. 기본은 인덱스만 반환 (토큰 절약). detail=true로 전체 내용 확인.',
+    description: 'Search stored memories using FTS5 full-text search or semantic/embedding similarity. Default mode returns compact index entries (id, type, truncated content) to save tokens — set detail=true for full content. Supports filtering by type, project, tags, and minimum importance. Read-only. Use memory_get to fetch full content for specific IDs found in search results. Use memory_related to explore graph connections from a known memory.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '검색어 (자연어)' },
+        query: { type: 'string', description: 'Natural language search query' },
         type: {
           type: 'string',
           enum: ['observation', 'decision', 'learning', 'error', 'pattern', 'all'],
-          description: '메모리 타입 필터 (기본: all)'
+          description: 'Filter by memory type (default: "all")'
         },
-        project: { type: 'string', description: '프로젝트 필터 (선택)' },
-        tags: { type: 'array', items: { type: 'string' }, description: '태그 필터 (선택)' },
-        semantic: { type: 'boolean', description: '시맨틱 검색 사용 (기본: false, 임베딩 기반)' },
-        minImportance: { type: 'number', description: '최소 중요도 (기본: 1)' },
-        limit: { type: 'number', description: '결과 개수 (기본: 10)' },
-        detail: { type: 'boolean', description: 'true면 전체 content, false면 요약 인덱스만 (기본: false)' }
+        project: { type: 'string', description: 'Filter by project (optional)' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags — matches if any tag is present (optional)' },
+        semantic: { type: 'boolean', description: 'Use embedding-based semantic search instead of keyword FTS5 (default: false)' },
+        minImportance: { type: 'number', description: 'Minimum importance threshold 1-10 (default: 1)' },
+        limit: { type: 'number', description: 'Max results to return (default: 10)' },
+        detail: { type: 'boolean', description: 'Return full content per memory (default: false — returns compact index only)' }
       },
       required: ['query']
     }
   },
   {
     name: 'memory_get',
-    description: '메모리 ID로 전체 내용을 조회합니다. memory_search 결과에서 상세 내용 확인 시 사용.',
+    description: 'Retrieve full content for one or more memories by ID. Designed as a follow-up to memory_search: first search to find relevant IDs, then use memory_get to load full details. Read-only. Accepts up to 20 IDs per call. Returns an array of complete memory objects including content, type, tags, importance, timestamps, and access count.',
     inputSchema: {
       type: 'object',
       properties: {
-        ids: { type: 'array', items: { type: 'number' }, description: '조회할 메모리 ID 배열 (최대 20개)' }
+        ids: { type: 'array', items: { type: 'number' }, description: 'Array of memory IDs to retrieve (max 20)' }
       },
       required: ['ids']
     }
   },
   {
     name: 'memory_related',
-    description: '특정 메모리와 관련된 메모리들을 찾습니다. 지식 그래프 + 시맨틱 유사도 결합.',
+    description: 'Find memories related to a given memory using knowledge graph traversal and/or semantic similarity. Combines two strategies: (1) graph edges created via graph_connect or memory_store\'s relatedTo, and (2) cosine similarity between embeddings. Read-only. Use graph_explore for pure graph traversal with depth control; use memory_search for text-based search.',
     inputSchema: {
       type: 'object',
       properties: {
-        memoryId: { type: 'number', description: '기준 메모리 ID' },
-        includeGraph: { type: 'boolean', description: '지식 그래프 관계 포함 (기본: true)' },
-        includeSemantic: { type: 'boolean', description: '시맨틱 유사 메모리 포함 (기본: true)' },
-        limit: { type: 'number', description: '결과 개수 (기본: 10)' }
+        memoryId: { type: 'number', description: 'The anchor memory ID to find relations for' },
+        includeGraph: { type: 'boolean', description: 'Include knowledge graph connections (default: true)' },
+        includeSemantic: { type: 'boolean', description: 'Include semantically similar memories via embeddings (default: true)' },
+        limit: { type: 'number', description: 'Max results to return (default: 10)' }
       },
       required: ['memoryId']
     }
   },
   {
     name: 'memory_stats',
-    description: '메모리 시스템 통계를 조회합니다. 타입별, 프로젝트별 분포 등.',
+    description: 'Get aggregate statistics about the memory system: total count, breakdown by type (observation/decision/learning/error/pattern), breakdown by project, top 5 most accessed memories, and 5 most recent entries. Read-only. Useful for understanding memory distribution and system health. Optionally scope to a single project.',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '특정 프로젝트만 (선택)' }
+        project: { type: 'string', description: 'Scope statistics to a single project (optional — omit for global stats)' }
       }
     }
   },
@@ -766,39 +766,39 @@ const tools: Tool[] = [
   // ===== 7. 지식 그래프 (2개) - v4 신규 =====
   {
     name: 'graph_connect',
-    description: '두 메모리 사이에 관계를 생성합니다. 지식 그래프 구축용.',
+    description: 'Create a directed edge between two memories in the knowledge graph. Supports 7 relation types for structured knowledge organization. Side effects: inserts or replaces a row in memory_relations (upsert on sourceId+targetId+relation). Use memory_related to discover existing connections; use graph_explore to traverse the graph from a starting node.',
     inputSchema: {
       type: 'object',
       properties: {
-        sourceId: { type: 'number', description: '출발 메모리 ID' },
-        targetId: { type: 'number', description: '도착 메모리 ID' },
+        sourceId: { type: 'number', description: 'Source memory ID (the "from" node)' },
+        targetId: { type: 'number', description: 'Target memory ID (the "to" node)' },
         relation: {
           type: 'string',
           enum: ['related_to', 'causes', 'solves', 'depends_on', 'contradicts', 'extends', 'example_of'],
-          description: '관계 유형: related_to(관련), causes(원인), solves(해결), depends_on(의존), contradicts(상충), extends(확장), example_of(예시)'
+          description: 'Edge type: related_to (general association), causes (A causes B), solves (A fixes B), depends_on (A requires B), contradicts (A conflicts with B), extends (A builds on B), example_of (A demonstrates B)'
         },
-        strength: { type: 'number', description: '관계 강도 0-1 (기본: 1.0)' }
+        strength: { type: 'number', description: 'Connection strength 0.0-1.0 (default: 1.0). Lower values indicate weaker associations.' }
       },
       required: ['sourceId', 'targetId', 'relation']
     }
   },
   {
     name: 'graph_explore',
-    description: '지식 그래프를 탐색합니다. 특정 메모리부터 연결된 모든 메모리를 깊이 우선 탐색.',
+    description: 'Traverse the knowledge graph from a starting memory using depth-first search. Returns all connected memories up to the specified depth, with their relation types, strengths, and directions. Read-only. Supports filtering by relation type and traversal direction. Use memory_related instead for a combined graph+semantic approach; use graph_connect to add new edges.',
     inputSchema: {
       type: 'object',
       properties: {
-        memoryId: { type: 'number', description: '시작 메모리 ID' },
-        depth: { type: 'number', description: '탐색 깊이 (기본: 2, 최대: 4)' },
+        memoryId: { type: 'number', description: 'Starting memory ID for graph traversal' },
+        depth: { type: 'number', description: 'Maximum traversal depth 1-4 (default: 2). Higher values return more results but may be slower.' },
         relation: {
           type: 'string',
           enum: ['related_to', 'causes', 'solves', 'depends_on', 'contradicts', 'extends', 'example_of', 'all'],
-          description: '관계 유형 필터 (기본: all)'
+          description: 'Filter by relation type (default: "all")'
         },
         direction: {
           type: 'string',
           enum: ['outgoing', 'incoming', 'both'],
-          description: '탐색 방향 (기본: both)'
+          description: 'Traversal direction — outgoing (A→B), incoming (B→A), or both (default: "both")'
         }
       },
       required: ['memoryId']

@@ -1,7 +1,12 @@
 {
   "name": "claude-session-continuity-mcp",
   "display_name": "Claude Session Continuity MCP",
-  "description": "Zero Re-explanation Session Continuity for Claude Code. Automatic context capture + semantic search + auto error-to-solution pipeline using Claude Hooks.",
+  "description": "Zero-config session continuity for Claude Code. Auto-captures context via Claude Hooks, provides 25 tools for persistent memory, task management, solution archive, and knowledge graph. Features multilingual semantic search across 94+ languages with cross-language retrieval powered by all-MiniLM-L6-v2 embeddings.",
+  "version": "1.13.1",
+  "author": {
+    "name": "leesgit",
+    "url": "https://github.com/leesgit"
+  },
   "repository": "https://github.com/leesgit/claude-session-continuity-mcp",
   "homepage": "https://www.npmjs.com/package/claude-session-continuity-mcp",
   "license": "MIT",
@@ -13,31 +18,106 @@
     }
   },
   "tools": [
-    "session_start",
-    "session_end",
-    "session_history",
-    "search_sessions",
-    "memory_store",
-    "memory_search",
-    "memory_get",
-    "memory_related",
-    "memory_stats",
-    "solution_record",
-    "solution_find",
-    "solution_suggest",
-    "project_init",
-    "project_status",
-    "project_analyze",
-    "list_projects",
-    "task_add",
-    "task_list",
-    "task_update",
-    "task_suggest",
-    "graph_connect",
-    "graph_explore",
-    "verify_build",
-    "verify_test",
-    "verify_all"
+    {
+      "name": "session_start",
+      "description": "Load project context at session start. Returns tech stack, recent activity, pending tasks, and blockers (~650 tokens). Auto-invoked by SessionStart hook."
+    },
+    {
+      "name": "session_end",
+      "description": "Save session state (summary, work done, next steps, modified files, blockers) to SQLite. Auto-restored by session_start in the next session."
+    },
+    {
+      "name": "session_history",
+      "description": "Retrieve past session records chronologically. Returns summary, work done, files modified, and verification results per session."
+    },
+    {
+      "name": "search_sessions",
+      "description": "Semantic search across session history using multilingual embeddings (94+ languages). Falls back to FTS5 keyword search."
+    },
+    {
+      "name": "project_status",
+      "description": "Get project status: completion percentage, task breakdown, recent activity, and active blockers."
+    },
+    {
+      "name": "project_init",
+      "description": "Initialize a new project. Auto-detects tech stack from package.json/pubspec.yaml/build.gradle. Idempotent."
+    },
+    {
+      "name": "project_analyze",
+      "description": "Auto-detect project tech stack, framework, platform, directory structure, and dependencies by scanning files."
+    },
+    {
+      "name": "list_projects",
+      "description": "List all projects with platform type, initialization status, and session context availability."
+    },
+    {
+      "name": "task_add",
+      "description": "Add a task to a project backlog with priority ranking and file associations. Persisted in SQLite."
+    },
+    {
+      "name": "task_update",
+      "description": "Update task status (pending/in_progress/done/blocked). Setting 'done' auto-records completion timestamp."
+    },
+    {
+      "name": "task_list",
+      "description": "List project tasks filtered by status. Returns tasks with priority, related files, and status summary counts."
+    },
+    {
+      "name": "task_suggest",
+      "description": "Scan source files for TODO/FIXME/HACK/XXX comments and return as suggested tasks. Read-only."
+    },
+    {
+      "name": "solution_record",
+      "description": "Record an error-solution pair. Associates error signature, fix description, and related files. Auto-indexed for FTS5."
+    },
+    {
+      "name": "solution_find",
+      "description": "Search solution archive by error message/signature. Supports FTS5 keyword and semantic embedding search."
+    },
+    {
+      "name": "solution_suggest",
+      "description": "AI-powered fix suggestions based on the solution archive. Retrieves relevant past solutions and generates recommendations."
+    },
+    {
+      "name": "verify_build",
+      "description": "Run project build command (auto-detected per platform). Executes with 5-minute timeout. Returns success/output."
+    },
+    {
+      "name": "verify_test",
+      "description": "Run project test suite (auto-detected per platform). Optionally scope to specific test path. 5-minute timeout."
+    },
+    {
+      "name": "verify_all",
+      "description": "Run build + test + lint sequentially. Returns per-gate results and overall pass/fail. Quality gate for commits."
+    },
+    {
+      "name": "memory_store",
+      "description": "Store typed knowledge (observation/decision/learning/error/pattern) with tags and importance. Auto-generates vector embedding."
+    },
+    {
+      "name": "memory_search",
+      "description": "Search memories via FTS5 or semantic embeddings. Compact index mode by default (saves tokens). Filterable by type/project/tags."
+    },
+    {
+      "name": "memory_get",
+      "description": "Retrieve full memory content by ID array (max 20). Follow-up to memory_search for loading complete details."
+    },
+    {
+      "name": "memory_related",
+      "description": "Find related memories via knowledge graph edges and/or semantic similarity. Combines graph traversal with cosine similarity."
+    },
+    {
+      "name": "memory_stats",
+      "description": "Aggregate memory statistics: total count, breakdown by type/project, top accessed, and most recent entries."
+    },
+    {
+      "name": "graph_connect",
+      "description": "Create a directed edge between memories. 7 relation types: related_to, causes, solves, depends_on, contradicts, extends, example_of."
+    },
+    {
+      "name": "graph_explore",
+      "description": "Depth-first traversal of the knowledge graph from a starting memory. Configurable depth (1-4), relation filter, and direction."
+    }
   ],
   "categories": [
     "Knowledge & Memory",
@@ -48,8 +128,11 @@
     "session-management",
     "memory",
     "context-continuity",
+    "knowledge-graph",
+    "semantic-search",
     "developer-tools",
     "mcp",
-    "hooks"
+    "hooks",
+    "multilingual"
   ]
 }
