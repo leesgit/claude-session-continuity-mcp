@@ -1,4 +1,6 @@
 {
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": ["leesgit"],
   "name": "claude-session-continuity-mcp",
   "display_name": "Claude Session Continuity MCP",
   "description": "Zero-config session continuity for Claude Code. Auto-captures context via Claude Hooks, provides 25 tools for persistent memory, task management, solution archive, and knowledge graph. Features multilingual semantic search across 94+ languages with cross-language retrieval powered by all-MiniLM-L6-v2 embeddings.",
