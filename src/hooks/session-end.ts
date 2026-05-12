@@ -422,6 +422,43 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
 }
 
 /**
+ * 슬래시 커맨드 prefix 제거 — "/mcp-dev 측정해줘" → "측정해줘"
+ * 첫 토큰이 `/`로 시작하면 다음 의미 토큰까지 스킵
+ * 슬래시뿐이면 빈 문자열 반환 (호출자가 폴백 처리)
+ */
+function stripSlashPrefix(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('/')) return trimmed;
+  // 첫 줄에서 슬래시 토큰을 제거
+  const firstLine = trimmed.split('\n')[0];
+  const tokens = firstLine.split(/\s+/);
+  let i = 0;
+  while (i < tokens.length && tokens[i].startsWith('/')) i++;
+  const rest = tokens.slice(i).join(' ').trim();
+  if (rest.length >= 3) return rest;
+  // 다음 줄에 의미 있는 본문이 있으면 사용
+  const lines = trimmed.split('\n').slice(1).map(l => l.trim()).filter(l => l.length >= 3 && !l.startsWith('/'));
+  return lines[0] || '';
+}
+
+/**
+ * Jaccard 유사도 (토큰 단위) — 0~1 사이
+ * 동일하면 1, 완전 다르면 0
+ */
+function jaccardSimilarity(a: string, b: string): number {
+  const tokenize = (s: string) => new Set(
+    s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(t => t.length >= 2)
+  );
+  const setA = tokenize(a);
+  const setB = tokenize(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersect = 0;
+  for (const t of setA) if (setB.has(t)) intersect++;
+  const union = setA.size + setB.size - intersect;
+  return union === 0 ? 0 : intersect / union;
+}
+
+/**
  * 사용자 메시지들을 세션 요약으로 압축
  * 예: ["MCP 테스트해줘", "개선해줘", "npm 배포하고 커밋해줘"] → "MCP 테스트 + 개선 + npm 배포/커밋"
  */
@@ -430,12 +467,13 @@ function summarizeUserRequests(requests: string[]): string {
 
   // 슬래시 커맨드 도움말 본문(/work, /clone-pro 등이 첫 줄에 박히는 케이스) 제외
   // → 36건 동일 last_work 누적 문제 해결
-  const meaningful = requests.filter(r => {
-    const trimmed = r.trim();
-    if (trimmed.startsWith('/')) return false;
-    if (/^[A-Z][a-z]+\s+(skill|command):/i.test(trimmed)) return false;
-    return trimmed.length > 0;
-  });
+  const meaningful = requests
+    .map(r => stripSlashPrefix(r))
+    .filter(r => {
+      if (!r) return false;
+      if (/^[A-Z][a-z]+\s+(skill|command):/i.test(r)) return false;
+      return r.length > 0;
+    });
   const source = meaningful.length > 0 ? meaningful : requests;
 
   if (source.length === 1) return source[0];
@@ -539,7 +577,9 @@ async function main() {
     }
 
     // lastWork 결정 (우선순위 폴백)
-    const { firstRequest, allRequests } = transcript.userRequests;
+    const { firstRequest: rawFirstRequest, allRequests } = transcript.userRequests;
+    // firstRequest 슬래시 prefix 제거 (예: "/mcp-dev 측정" → "측정")
+    const firstRequest = rawFirstRequest ? (stripSlashPrefix(rawFirstRequest) || rawFirstRequest) : '';
 
     // 2a: 사용자 요청 + 커밋 메시지 조합 (가장 이상적)
     if (firstRequest && commitMessages.length > 0) {
@@ -624,16 +664,31 @@ async function main() {
       process.exit(0);
     }
 
-    // 중복 저장 방지 (같은 내용이 1시간 이내에 저장됐으면 skip)
-    const recentDup = db.prepare(`
+    // 중복 저장 방지 — Jaccard 유사도 기반 (1시간 이내, 동일 프로젝트)
+    // 베이스라인: 동일 last_work가 4~5분 간격으로 반복 INSERT되는 케이스 5건/24h 발견
+    // 정확 일치 + Jaccard >= 0.85 둘 다 차단
+    const recentExact = db.prepare(`
       SELECT id FROM sessions
       WHERE project = ? AND last_work = ? AND timestamp > datetime('now', '-1 hour')
       LIMIT 1
     `).get(project, lastWork);
-    if (recentDup) {
-      console.log(`[SessionEnd] Skipping duplicate session for ${project}`);
+    if (recentExact) {
+      console.log(`[SessionEnd] Skipping duplicate (exact) for ${project}`);
       db.close();
       process.exit(0);
+    }
+    const recentRows = db.prepare(`
+      SELECT last_work FROM sessions
+      WHERE project = ? AND timestamp > datetime('now', '-1 hour')
+      ORDER BY timestamp DESC LIMIT 10
+    `).all(project) as Array<{ last_work: string }>;
+    for (const row of recentRows) {
+      if (!row.last_work) continue;
+      if (jaccardSimilarity(lastWork, row.last_work) >= 0.85) {
+        console.log(`[SessionEnd] Skipping near-duplicate (jaccard >= 0.85) for ${project}`);
+        db.close();
+        process.exit(0);
+      }
     }
 
     // 구조화 메타데이터 (issues 컬럼 활용)
