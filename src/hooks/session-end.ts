@@ -427,12 +427,23 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
  */
 function summarizeUserRequests(requests: string[]): string {
   if (requests.length === 0) return '';
-  if (requests.length === 1) return requests[0];
+
+  // 슬래시 커맨드 도움말 본문(/work, /clone-pro 등이 첫 줄에 박히는 케이스) 제외
+  // → 36건 동일 last_work 누적 문제 해결
+  const meaningful = requests.filter(r => {
+    const trimmed = r.trim();
+    if (trimmed.startsWith('/')) return false;
+    if (/^[A-Z][a-z]+\s+(skill|command):/i.test(trimmed)) return false;
+    return trimmed.length > 0;
+  });
+  const source = meaningful.length > 0 ? meaningful : requests;
+
+  if (source.length === 1) return source[0];
 
   // 중복/유사 요청 제거 (앞 20글자 기준)
   const unique: string[] = [];
   const seen = new Set<string>();
-  for (const req of requests) {
+  for (const req of source) {
     const key = req.slice(0, 20).toLowerCase();
     if (!seen.has(key)) {
       seen.add(key);
@@ -462,8 +473,7 @@ async function main() {
 
     const input: SessionEndInput = inputData ? JSON.parse(inputData) : {};
 
-    // 중복 호출 가드: Stop 이벤트가 ~880ms 간격으로 2회 발화하는 플랫폼 동작 차단
-    // → transcript 파싱 비용 2배 낭비 방지
+    // 중복 호출 가드 1: stop_hook_active 플래그 (Claude Code 공식 플래그)
     if (input.stop_hook_active === true) {
       process.exit(0);
     }
@@ -472,11 +482,29 @@ async function main() {
     const project = detectProject(cwd);
     const dbPath = getDbPath(cwd);
 
+    // 중복 호출 가드 2: session_id + 5초 윈도우 파일락
+    // stop_hook_active 가 false 로 들어오는 케이스 (실측: 36건 동일 last_work 누적) 차단
+    if (input.session_id) {
+      const lockPath = path.join(path.dirname(dbPath), `.session-end-${input.session_id}.lock`);
+      try {
+        const now = Date.now();
+        if (fs.existsSync(lockPath)) {
+          const lockMtime = fs.statSync(lockPath).mtimeMs;
+          if (now - lockMtime < 5000) {
+            process.exit(0); // 5초 내 재발화 차단
+          }
+        }
+        fs.writeFileSync(lockPath, String(now));
+      } catch {
+        // 락 파일 실패는 무시 (fail-soft)
+      }
+    }
+
     // 디버그 로그
     const debugLogPath = path.join(path.dirname(dbPath), 'session-end-debug.log');
     const inputKeys = Object.keys(input);
     const lastMsgLen = input.last_assistant_message?.length || 0;
-    const debugLine = `[${new Date().toISOString()}] project=${project} keys=[${inputKeys.join(',')}] transcript_path=${input.transcript_path || 'none'} last_msg_len=${lastMsgLen}\n`;
+    const debugLine = `[${new Date().toISOString()}] project=${project} sid=${input.session_id?.slice(0,8) || 'none'} keys=[${inputKeys.join(',')}] transcript_path=${input.transcript_path || 'none'} last_msg_len=${lastMsgLen}\n`;
     fs.appendFileSync(debugLogPath, debugLine);
 
     if (!fs.existsSync(dbPath)) {
