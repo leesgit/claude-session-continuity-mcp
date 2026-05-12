@@ -180,6 +180,56 @@ function buildHandoverContext(
   return context;
 }
 
+/**
+ * Playwright 캐시 정리 - 오래된 스냅샷/로그 제거 (20MB 컨텍스트 초과 방지)
+ */
+function cleanPlaywrightCache(cwd: string) {
+  const playwrightDir = path.join(cwd, '.playwright-mcp');
+  if (!fs.existsSync(playwrightDir)) return;
+
+  const now = Date.now();
+  const MAX_AGE = 30 * 60 * 1000; // 30분 이상 된 파일 정리
+  const MAX_DIR_SIZE = 5 * 1024 * 1024; // 5MB 초과 시 정리
+
+  try {
+    const files = fs.readdirSync(playwrightDir);
+    let totalSize = 0;
+    const fileInfos: { name: string; mtime: number; size: number }[] = [];
+
+    for (const file of files) {
+      const filePath = path.join(playwrightDir, file);
+      const stat = fs.statSync(filePath);
+      totalSize += stat.size;
+      fileInfos.push({ name: file, mtime: stat.mtimeMs, size: stat.size });
+    }
+
+    if (totalSize < MAX_DIR_SIZE) return; // 5MB 미만이면 정리 불필요
+
+    // 오래된 파일부터 삭제
+    fileInfos.sort((a, b) => a.mtime - b.mtime);
+    for (const fi of fileInfos) {
+      if (now - fi.mtime > MAX_AGE) {
+        fs.unlinkSync(path.join(playwrightDir, fi.name));
+        totalSize -= fi.size;
+      }
+      if (totalSize < MAX_DIR_SIZE) break;
+    }
+  } catch { /* ignore */ }
+
+  // 루트의 오래된 스크린샷 PNG/JPEG도 정리
+  try {
+    const rootFiles = fs.readdirSync(cwd);
+    for (const file of rootFiles) {
+      if (!/\.(png|jpeg|jpg)$/i.test(file)) continue;
+      const filePath = path.join(cwd, file);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > MAX_AGE) {
+        fs.unlinkSync(filePath);
+      }
+    }
+  } catch { /* ignore */ }
+}
+
 async function main() {
   try {
     let inputData = '';
@@ -189,6 +239,9 @@ async function main() {
 
     const input: CompactInput = inputData ? JSON.parse(inputData) : {};
     const cwd = input.cwd || process.cwd();
+
+    // Playwright 캐시 정리 (20MB 컨텍스트 초과 방지)
+    cleanPlaywrightCache(cwd);
     const project = detectProject(cwd);
     const dbPath = getDbPath(cwd);
 
@@ -198,6 +251,7 @@ async function main() {
     }
 
     const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL'); // 다중 hook 프로세스 동시성 보장
 
     // 핸드오버 컨텍스트 빌드
     const handover = input.transcript ? buildHandoverContext(input.transcript) : null;
@@ -277,7 +331,8 @@ async function main() {
     process.stdout.write(JSON.stringify(output));
     process.exit(0);
   } catch (e) {
-    // 에러 시 조용히 종료
+    // fail-soft: 컴팩션이 멈추지 않도록 continue:true 반드시 반환
+    process.stdout.write(JSON.stringify({ continue: true }));
     process.exit(0);
   }
 }

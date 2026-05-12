@@ -209,6 +209,7 @@ const MAX_DIRECTIVES = 20;
 function extractAndSaveDirectives(dbPath: string, project: string, prompt: string): void {
   try {
     const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL'); // 다중 hook 프로세스 동시성 보장
 
     for (const { pattern, priority } of DIRECTIVE_PATTERNS) {
       const match = prompt.match(pattern);

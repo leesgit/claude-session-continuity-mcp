@@ -74,26 +74,38 @@ function cleanupNoiseMemories(db: InstanceType<typeof Database>): void {
   } catch { /* ignore */ }
 }
 
+// 토큰 예산 시스템 (컨텍스트 무한 증가 방지)
+const MAX_CONTEXT_TOKENS = parseInt(process.env.MCP_CONTEXT_BUDGET || '2000', 10);
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4); // 대략적 추정 (한글은 1.5~2배)
+}
+
 function loadContext(dbPath: string, project: string): string | null {
   if (!fs.existsSync(dbPath)) return null;
 
   try {
     const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL'); // 다중 hook 프로세스 동시성 보장
 
     // 노이즈 메모리 자동 정리
     cleanupNoiseMemories(db);
 
     const lines: string[] = [`# ${project} - Session Resumed\n`];
+    let tokenBudget = MAX_CONTEXT_TOKENS;
 
-    // 현재 상태
+    // [Priority 1] 현재 상태
     const active = db.prepare('SELECT current_state, blockers FROM active_context WHERE project = ?').get(project) as { current_state: string; blockers: string } | undefined;
     if (active?.current_state) {
-      lines.push(`📍 **State**: ${active.current_state}`);
-      if (active.blockers) lines.push(`🚧 **Blocker**: ${active.blockers}`);
-      lines.push('');
+      const stateBlock = `📍 **State**: ${active.current_state}` + (active.blockers ? `\n🚧 **Blocker**: ${active.blockers}` : '');
+      const cost = estimateTokens(stateBlock);
+      if (tokenBudget > cost) {
+        lines.push(stateBlock);
+        lines.push('');
+        tokenBudget -= cost;
+      }
     }
 
-    // 최근 3개 세션 (빈 세션 skip)
+    // [Priority 2] 최근 3개 세션 (빈 세션 skip)
     const recentSessions = db.prepare(`
       SELECT last_work, next_tasks, issues, timestamp FROM sessions
       WHERE project = ?
@@ -107,27 +119,29 @@ function loadContext(dbPath: string, project: string): string | null {
       last_work: string; next_tasks: string; issues: string; timestamp: string
     }>;
 
-    if (recentSessions.length > 0) {
-      lines.push('## Recent Sessions');
+    if (recentSessions.length > 0 && tokenBudget > 100) {
+      const sessionLines: string[] = ['## Recent Sessions'];
       for (const session of recentSessions) {
-        // last_work 60자 제한 (토큰 예산)
         const work = session.last_work.length > 60 ? session.last_work.slice(0, 60) + '...' : session.last_work;
-        lines.push(`- [${session.timestamp?.slice(0, 10) || '?'}] ${work}`);
+        sessionLines.push(`- [${session.timestamp?.slice(0, 10) || '?'}] ${work}`);
 
-        // 커밋 정보 (간결하게)
         if (session.issues) {
           try {
             const meta = JSON.parse(session.issues);
             if (meta.commits?.length > 0) {
-              lines.push(`  commits: ${meta.commits.slice(0, 2).join('; ').slice(0, 80)}`);
+              sessionLines.push(`  commits: ${meta.commits.slice(0, 2).join('; ').slice(0, 80)}`);
             }
           } catch { /* skip */ }
         }
       }
-      lines.push('');
+      const cost = estimateTokens(sessionLines.join('\n'));
+      if (tokenBudget > cost) {
+        lines.push(...sessionLines, '');
+        tokenBudget -= cost;
+      }
     }
 
-    // 사용자 지시사항
+    // [Priority 3] 사용자 지시사항 (가장 중요 - 예산 부족해도 high priority는 포함)
     try {
       const directives = db.prepare(`
         SELECT directive, priority FROM user_directives
@@ -135,35 +149,52 @@ function loadContext(dbPath: string, project: string): string | null {
       `).all(project) as Array<{ directive: string; priority: string }>;
 
       if (directives.length > 0) {
-        lines.push('## Directives');
+        const directiveLines = ['## Directives'];
         for (const d of directives) {
           const icon = d.priority === 'high' ? '🔴' : '📎';
-          lines.push(`- ${icon} ${d.directive}`);
+          directiveLines.push(`- ${icon} ${d.directive}`);
         }
-        lines.push('');
+        const cost = estimateTokens(directiveLines.join('\n'));
+        // 지시사항은 예산 초과해도 high priority는 포함
+        const highOnly = directives.filter(d => d.priority === 'high');
+        if (tokenBudget > cost) {
+          lines.push(...directiveLines, '');
+          tokenBudget -= cost;
+        } else if (highOnly.length > 0) {
+          const criticalLines = ['## Directives'];
+          for (const d of highOnly) criticalLines.push(`- 🔴 ${d.directive}`);
+          lines.push(...criticalLines, '');
+          tokenBudget -= estimateTokens(criticalLines.join('\n'));
+        }
       }
     } catch { /* table may not exist yet */ }
 
-    // 미완료 태스크
-    try {
-      const tasks = db.prepare(`
-        SELECT title, priority, status FROM tasks
-        WHERE project = ? AND status IN ('pending', 'in_progress')
-        ORDER BY priority DESC LIMIT 5
-      `).all(project) as Array<{ title: string; priority: number; status: string }>;
+    // [Priority 4] 미완료 태스크
+    if (tokenBudget > 50) {
+      try {
+        const tasks = db.prepare(`
+          SELECT title, priority, status FROM tasks
+          WHERE project = ? AND status IN ('pending', 'in_progress')
+          ORDER BY priority DESC LIMIT 5
+        `).all(project) as Array<{ title: string; priority: number; status: string }>;
 
-      if (tasks.length > 0) {
-        lines.push('## Pending Tasks');
-        for (const t of tasks) {
-          const icon = t.status === 'in_progress' ? '🔄' : '⏳';
-          lines.push(`- ${icon} [P${t.priority}] ${t.title}`);
+        if (tasks.length > 0) {
+          const taskLines = ['## Pending Tasks'];
+          for (const t of tasks) {
+            const icon = t.status === 'in_progress' ? '🔄' : '⏳';
+            taskLines.push(`- ${icon} [P${t.priority}] ${t.title}`);
+          }
+          const cost = estimateTokens(taskLines.join('\n'));
+          if (tokenBudget > cost) {
+            lines.push(...taskLines, '');
+            tokenBudget -= cost;
+          }
         }
-        lines.push('');
-      }
-    } catch { /* table may not exist */ }
+      } catch { /* table may not exist */ }
+    }
 
-    // 중요 메모리 (temporal decay 적용)
-    try {
+    // [Priority 5] 중요 메모리 (temporal decay 적용, 예산 내에서)
+    if (tokenBudget > 80) try {
       const memories = db.prepare(`
         SELECT content, memory_type, importance, created_at, access_count FROM memories
         WHERE project = ?
@@ -189,24 +220,31 @@ function loadContext(dbPath: string, project: string): string | null {
         const typeIcons: Record<string, string> = {
           decision: '🎯', learning: '📚', error: '⚠️', preference: '💡'
         };
-        lines.push('## Key Memories');
+        const memoryLines = ['## Key Memories'];
         for (const m of scored) {
           const icon = typeIcons[m.memory_type] || '💭';
           const content = m.content.length > 80 ? m.content.slice(0, 80) + '...' : m.content;
-          lines.push(`- ${icon} ${content}`);
+          memoryLines.push(`- ${icon} ${content}`);
         }
-        lines.push('');
+        const cost = estimateTokens(memoryLines.join('\n'));
+        if (tokenBudget > cost) {
+          lines.push(...memoryLines, '');
+          tokenBudget -= cost;
+        }
       }
     } catch { /* ignore */ }
 
-    // 솔루션 통계 (1줄)
+    // [Priority 6] 솔루션 통계 (1줄, 저비용)
     try {
       const solCount = (db.prepare(
         'SELECT COUNT(*) as cnt FROM solutions WHERE project = ?'
       ).get(project) as { cnt: number })?.cnt || 0;
       if (solCount > 0) {
-        lines.push(`Solutions: ${solCount} recorded (auto-injected on error)`);
-        lines.push('');
+        const solLine = `\nSolutions: ${solCount} recorded (auto-injected on error)\n`;
+        if (tokenBudget > 10) {
+          lines.push(solLine);
+          tokenBudget -= estimateTokens(solLine);
+        }
       }
     } catch { /* solutions table may not exist */ }
 

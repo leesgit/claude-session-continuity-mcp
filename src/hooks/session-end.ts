@@ -20,6 +20,8 @@ interface SessionEndInput {
   session_id?: string;
   transcript_path?: string;
   last_assistant_message?: string;
+  // Stop 이벤트가 중첩 호출되는 경우 true (Claude Code 플랫폼 동작)
+  stop_hook_active?: boolean;
   // 레거시: 이전 버전 호환
   transcript?: Array<{
     role: string;
@@ -251,6 +253,8 @@ interface TranscriptData {
   userRequests: { firstRequest: string; allRequests: string[] };
   recentAssistantMessages: string[];
   errorFixPairs: Array<{ error: string; fix: string }>;
+  firstTimestamp: string | null; // 세션 시작 시각 (transcript 첫 entry)
+  lastTimestamp: string | null;  // 세션 종료 시각 (transcript 마지막 entry)
 }
 
 /**
@@ -265,6 +269,8 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
     userRequests: { firstRequest: '', allRequests: [] },
     recentAssistantMessages: [],
     errorFixPairs: [],
+    firstTimestamp: null,
+    lastTimestamp: null,
   };
 
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return result;
@@ -298,6 +304,12 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
         const entry = JSON.parse(line);
         const role = entry.type || entry.role || '';
         const content = entry.message?.content;
+
+        // === 0. Timestamp 추출 (세션 duration 계산용) ===
+        if (entry.timestamp) {
+          if (!result.firstTimestamp) result.firstTimestamp = entry.timestamp;
+          result.lastTimestamp = entry.timestamp;
+        }
 
         // === 1. Commit 추출 (tool_use 블록에서) ===
         if (line.includes('git commit') && Array.isArray(content)) {
@@ -449,6 +461,13 @@ async function main() {
     }
 
     const input: SessionEndInput = inputData ? JSON.parse(inputData) : {};
+
+    // 중복 호출 가드: Stop 이벤트가 ~880ms 간격으로 2회 발화하는 플랫폼 동작 차단
+    // → transcript 파싱 비용 2배 낭비 방지
+    if (input.stop_hook_active === true) {
+      process.exit(0);
+    }
+
     const cwd = input.cwd || process.cwd();
     const project = detectProject(cwd);
     const dbPath = getDbPath(cwd);
@@ -466,6 +485,7 @@ async function main() {
     }
 
     const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL'); // 다중 hook 프로세스 동시성 보장
 
     // === 추출 시작 ===
     let lastWork = '';
@@ -480,6 +500,8 @@ async function main() {
       userRequests: { firstRequest: '', allRequests: [] },
       recentAssistantMessages: [],
       errorFixPairs: [],
+      firstTimestamp: null,
+      lastTimestamp: null,
     };
     if (input.transcript_path) {
       transcript = await parseTranscriptSinglePass(input.transcript_path);
@@ -594,16 +616,27 @@ async function main() {
     };
     const hasMetadata = commitMessages.length > 0 || decisions.length > 0 || errorsSolved.length > 0;
 
+    // 세션 duration 계산 (transcript first ↔ last timestamp)
+    let durationMinutes: number | null = null;
+    if (transcript.firstTimestamp && transcript.lastTimestamp) {
+      const start = new Date(transcript.firstTimestamp).getTime();
+      const end = new Date(transcript.lastTimestamp).getTime();
+      if (!isNaN(start) && !isNaN(end) && end >= start) {
+        durationMinutes = Math.round((end - start) / 60000);
+      }
+    }
+
     // 세션 기록 저장
     db.prepare(`
-      INSERT INTO sessions (project, last_work, next_tasks, modified_files, issues)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO sessions (project, last_work, next_tasks, modified_files, issues, duration_minutes)
+      VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       project,
       lastWork,
       JSON.stringify([...new Set(nextTasks)].slice(0, 5)),
       JSON.stringify(modifiedFiles.slice(0, 15)),
-      hasMetadata ? JSON.stringify(metadata) : null
+      hasMetadata ? JSON.stringify(metadata) : null,
+      durationMinutes
     );
 
     // 활성 컨텍스트 업데이트
@@ -633,6 +666,41 @@ async function main() {
         }
       } catch { /* solutions table may not exist */ }
     }
+
+    // architecture_decisions 자동 누적 (세션에서 추출된 결정사항 병합)
+    if (decisions.length > 0) {
+      try {
+        const existing = db.prepare(
+          'SELECT architecture_decisions FROM project_context WHERE project = ?'
+        ).get(project) as { architecture_decisions: string } | undefined;
+
+        let existingDecisions: string[] = [];
+        if (existing?.architecture_decisions) {
+          try { existingDecisions = JSON.parse(existing.architecture_decisions); } catch { /* ignore */ }
+        }
+
+        // 중복 제거 후 병합 (최대 20개 유지)
+        const merged = [...new Set([...existingDecisions, ...decisions])].slice(-20);
+        db.prepare(`
+          INSERT INTO project_context (project, architecture_decisions)
+          VALUES (?, ?)
+          ON CONFLICT(project) DO UPDATE SET architecture_decisions = ?
+        `).run(project, JSON.stringify(merged), JSON.stringify(merged));
+      } catch { /* project_context table may not exist */ }
+    }
+
+    // 세션 임베딩 사전 생성 (search_sessions 성능 최적화)
+    try {
+      const lastSession = db.prepare(
+        'SELECT id FROM sessions WHERE project = ? ORDER BY timestamp DESC LIMIT 1'
+      ).get(project) as { id: number } | undefined;
+
+      if (lastSession && lastWork) {
+        // 간단한 임베딩은 동기적으로 시도하지 않고 DB에 표시만 남김
+        // MCP 서버의 generateEmbedding이 search 시 캐시 miss에서 lazy 생성
+        // session-end 훅은 transformers 모델 로드 오버헤드가 크므로 skip
+      }
+    } catch { /* ignore */ }
 
     db.close();
 

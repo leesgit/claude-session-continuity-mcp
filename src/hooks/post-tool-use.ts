@@ -23,6 +23,44 @@ interface ToolUseInput {
   tool_result?: string;
 }
 
+// ===== Playwright 캐시 정리 (20MB 컨텍스트 초과 방지) =====
+
+function cleanPlaywrightCache(cwd: string) {
+  const MAX_TOTAL = 3 * 1024 * 1024; // 3MB 초과 시 정리
+  const MAX_FILES = 20; // 최대 파일 수
+
+  // .playwright-mcp/ 정리
+  const playwrightDir = path.join(cwd, '.playwright-mcp');
+  if (fs.existsSync(playwrightDir)) {
+    try {
+      const files = fs.readdirSync(playwrightDir)
+        .map(f => ({ name: f, path: path.join(playwrightDir, f), stat: fs.statSync(path.join(playwrightDir, f)) }))
+        .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
+
+      let totalSize = files.reduce((sum, f) => sum + f.stat.size, 0);
+
+      // 오래된 파일부터 삭제 (최근 5개만 유지)
+      while (files.length > 5 || totalSize > MAX_TOTAL) {
+        const oldest = files.shift();
+        if (!oldest) break;
+        try { fs.unlinkSync(oldest.path); totalSize -= oldest.stat.size; } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 루트의 스크린샷 파일 정리 (최근 3개만 유지)
+  try {
+    const screenshots = fs.readdirSync(cwd)
+      .filter(f => /\.(png|jpeg|jpg)$/i.test(f))
+      .map(f => ({ name: f, path: path.join(cwd, f), stat: fs.statSync(path.join(cwd, f)) }))
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs); // 최신순
+
+    for (let i = 3; i < screenshots.length; i++) {
+      try { fs.unlinkSync(screenshots[i].path); } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
+
 // ===== 에러 감지 → 솔루션 자동 주입 =====
 
 const ERROR_PATTERNS = [
@@ -228,6 +266,13 @@ async function main() {
       process.exit(0);
     }
 
+    // Playwright 도구 사용 후 캐시 정리 (20MB 컨텍스트 초과 방지)
+    if (toolName.startsWith('mcp__playwright__')) {
+      const cwd = input.cwd || process.cwd();
+      cleanPlaywrightCache(cwd);
+      process.exit(0);
+    }
+
     const TRACKED_TOOLS = ['Edit', 'Write', 'Read', 'Glob', 'Grep'];
     const IGNORED_PATTERNS = ['node_modules', '.git/', 'dist/', 'build/', '.next/', 'coverage/', '.DS_Store'];
 
@@ -263,6 +308,7 @@ async function main() {
     }
 
     const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL'); // 다중 hook 프로세스 동시성 보장
 
     // hot_paths 추적 (모든 추적 도구)
     try {
