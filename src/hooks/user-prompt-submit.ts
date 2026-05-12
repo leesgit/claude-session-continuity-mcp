@@ -58,14 +58,19 @@ function getProject(cwd: string, workspaceRoot: string): string | null {
 // ===== 과거 참조 자동 감지 =====
 
 const PAST_REFERENCE_PATTERNS: RegExp[] = [
-  // 한국어
+  // 한국어 - 시간 참조
   /(?:저번에|전에|이전에|그때|지난번에|예전에|아까)\s+(.+?)(?:\s*(?:어떻게|뭐|무엇|왜|어디|언제))/,
   /(?:했던|했었던|만들었던|수정했던|구현했던|해결했던)\s*(.+)/,
   /(?:지난|이전|전)\s*(?:세션|작업|시간|번).*?(?:에서|때)\s*(.+)/,
+  // 한국어 - 보유/기억 질문 ("내꺼 GCP 코인 정보 가지고 있나?")
+  /(?:내|내꺼|우리)\s+(.+?)\s+(?:가지고\s*있|있어|있나|있지|있냐|남아|남았|저장)/,
+  /(.+?)\s+(?:기억해|기억하고|기억나|알고\s*있|아는)/,
+  /(?:저장한|기록한|적어둔|메모한|남긴)\s+(.+)/,
   // 영어
   /(?:last time|before|previously|earlier)\s+(?:.*?)\s*((?:how|what|why|where|when).*)/i,
   /(?:did we|did I|have we|have I)\s+(.+)\s+(?:before|last time|earlier)/i,
-  /(?:remember when|recall when)\s+(.+)/i,
+  /(?:remember when|recall when|do you remember|do you recall)\s+(.+)/i,
+  /(?:do you have|do you know|got)\s+(.+?)\s+(?:info|information|saved|stored|record)/i,
 ];
 
 function extractPastKeywords(prompt: string): string | null {

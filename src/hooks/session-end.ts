@@ -390,9 +390,9 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
   }
   result.decisions = [...decisionSet].slice(0, 3);
 
-  // Error-Fix pairs
-  const errorRe = /(?:error|Error|ERROR|오류|실패|FAILED|Exception)[:\s](.{5,80})/;
-  const fixRe = /(?:fixed|resolved|수정|해결|Added|수정 완료)/i;
+  // Error-Fix pairs (한국어 패턴 보강)
+  const errorRe = /(?:error|Error|ERROR|오류|에러|버그|예외|실패|FAILED|Exception|TypeError|ReferenceError|SyntaxError|crash|crashed|충돌|문제)[:\s](.{5,80})/;
+  const fixRe = /(?:fixed|resolved|patched|수정|해결|고침|처리|완료|변경|적용|반영|커밋|Added|수정 완료|문제 해결|해결됨|되돌림)/i;
   const pairSet = new Set<string>();
 
   for (let i = 0; i < recentEntries.length - 1; i++) {
@@ -688,6 +688,36 @@ async function main() {
         `).run(project, JSON.stringify(merged), JSON.stringify(merged));
       } catch { /* project_context table may not exist */ }
     }
+
+    // 고품질 자동 메모리 추출 (v1.10 노이즈 제거 정책 유지하면서 가치 있는 것만)
+    // - decisions: 의미있는 의사결정 (importance=7)
+    // - commits: feat/fix만 (importance=6)
+    // - 동일 content 중복 방지 (검색해서 없을 때만 INSERT)
+    try {
+      const memoryDupCheck = db.prepare(
+        'SELECT id FROM memories WHERE project = ? AND content = ? LIMIT 1'
+      );
+      const memoryInsert = db.prepare(`
+        INSERT INTO memories (content, memory_type, tags, project, importance)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      for (const decision of decisions) {
+        if (decision.length < 15) continue;
+        if (!memoryDupCheck.get(project, decision)) {
+          memoryInsert.run(decision, 'decision', JSON.stringify(['auto-extracted']), project, 7);
+        }
+      }
+
+      // feat/fix 커밋만 (chore, docs, style은 학습 가치 낮음)
+      for (const commit of commitMessages) {
+        if (!/^(feat|fix)(\(.+\))?:/i.test(commit)) continue;
+        if (commit.length < 20) continue;
+        if (!memoryDupCheck.get(project, commit)) {
+          memoryInsert.run(commit, 'learning', JSON.stringify(['auto-extracted', 'commit']), project, 6);
+        }
+      }
+    } catch { /* memories table issue, skip */ }
 
     // 세션 임베딩 사전 생성 (search_sessions 성능 최적화)
     try {
