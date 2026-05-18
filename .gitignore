@@ -22,6 +22,9 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# npm pack output
+*.tgz
+
 # Environment
 .env
 .env.local

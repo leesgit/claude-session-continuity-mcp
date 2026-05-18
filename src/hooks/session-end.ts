@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
 
 interface SessionEndInput {
@@ -520,21 +521,36 @@ async function main() {
     const project = detectProject(cwd);
     const dbPath = getDbPath(cwd);
 
-    // 중복 호출 가드 2: session_id + 5초 윈도우 파일락
-    // stop_hook_active 가 false 로 들어오는 케이스 (실측: 36건 동일 last_work 누적) 차단
-    if (input.session_id) {
-      const lockPath = path.join(path.dirname(dbPath), `.session-end-${input.session_id}.lock`);
+    // 중복 호출 가드 2: transcript_path 해시 기반 5초 윈도우 파일락
+    // Phase 3: session_id 5초 락 도입 (sid 있는 호출만 차단됨)
+    // Phase 5: 실측에서 모든 stop이 [sid 있는 호출 + sid 없는 호출] 페어로 들어옴
+    //          → transcript_path 해시를 우선 키로 사용해야 같은 페어가 같은 락을 공유
+    //          → transcript_path 없을 때만 session_id 폴백
+    const lockKey = input.transcript_path
+      ? crypto.createHash('md5').update(input.transcript_path).digest('hex').slice(0, 16)
+      : (input.session_id || null);
+    if (lockKey) {
+      const lockPath = path.join(path.dirname(dbPath), `.session-end-${lockKey}.lock`);
+      const now = Date.now();
       try {
-        const now = Date.now();
-        if (fs.existsSync(lockPath)) {
-          const lockMtime = fs.statSync(lockPath).mtimeMs;
-          if (now - lockMtime < 5000) {
-            process.exit(0); // 5초 내 재발화 차단
+        // Phase 5: atomic `wx` (존재 시 EEXIST throw) → 두 hook 인스턴스가 거의 동시에 진입하는 race 차단
+        // 베이스라인: id=1606/1607이 ~500ms 차이로 동시 INSERT 됨 (debug.log 13:26:51.205 + 13:26:51.702)
+        fs.writeFileSync(lockPath, String(now), { flag: 'wx' });
+      } catch (e: unknown) {
+        // 파일이 이미 존재 (다른 hook 인스턴스가 처리 중) → mtime 확인 후 5초 내면 차단
+        if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+          try {
+            const lockMtime = fs.statSync(lockPath).mtimeMs;
+            if (now - lockMtime < 5000) {
+              process.exit(0); // 5초 내 재발화 차단
+            }
+            // 5초 지난 stale 락 → 덮어쓰기 (이 호출이 새 작업)
+            fs.writeFileSync(lockPath, String(now));
+          } catch {
+            // stat/write 실패는 fail-soft
           }
         }
-        fs.writeFileSync(lockPath, String(now));
-      } catch {
-        // 락 파일 실패는 무시 (fail-soft)
+        // 그 외 락 파일 에러는 무시 (fail-soft)
       }
     }
 
@@ -657,6 +673,16 @@ async function main() {
       lastWork = `Modified files: ${fileNames}`;
     }
 
+    // Phase 5: 모든 last_work 결정 경로에 stripSlashPrefix 강제 적용
+    // 베이스라인: 2a 경로(firstRequest)만 stripSlashPrefix 적용되고 2c~2e 폴백은 미적용
+    //          → 같은 transcript에서 두 hook 인스턴스가 서로 다른 경로로 들어가
+    //            한쪽은 "측정", 한쪽은 "/mcp-dev 측정"으로 분기 → Jaccard 0.85 미달로 둘 다 통과
+    //          stripSlashPrefix가 빈 문자열을 반환하면 원본 유지 (의미 토큰이 없는 경우)
+    if (lastWork) {
+      const stripped = stripSlashPrefix(lastWork);
+      if (stripped) lastWork = stripped;
+    }
+
     // 빈 세션 skip
     if (!lastWork) {
       console.log(`[SessionEnd] Skipping empty session for ${project} (no meaningful last_work)`);
@@ -684,7 +710,10 @@ async function main() {
     `).all(project) as Array<{ last_work: string }>;
     for (const row of recentRows) {
       if (!row.last_work) continue;
-      if (jaccardSimilarity(lastWork, row.last_work) >= 0.85) {
+      // Phase 5: 비교 전 양쪽 모두 stripSlashPrefix 정규화 → 표현 차이 흡수
+      const normalizedCurrent = stripSlashPrefix(lastWork) || lastWork;
+      const normalizedRow = stripSlashPrefix(row.last_work) || row.last_work;
+      if (jaccardSimilarity(normalizedCurrent, normalizedRow) >= 0.85) {
         console.log(`[SessionEnd] Skipping near-duplicate (jaccard >= 0.85) for ${project}`);
         db.close();
         process.exit(0);

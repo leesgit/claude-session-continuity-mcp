@@ -1,4 +1,4 @@
-# claude-session-continuity-mcp (v1.13.0)
+# claude-session-continuity-mcp (v1.13.2)
 
 > **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search + auto error→solution pipeline
 
@@ -64,15 +64,75 @@ Every new Claude Code session:
 
 ## Quick Start
 
-### One Command Installation
+### Recommended: Global Installation
 
 ```bash
-npm install claude-session-continuity-mcp
+npm install -g claude-session-continuity-mcp
 ```
 
 **That's it!** The postinstall script automatically:
 1. Registers MCP server in `~/.claude.json`
 2. Installs Claude Hooks in `~/.claude/settings.json`
+
+### Why Global (`-g`)?
+
+This tool is designed to track **all your Claude Code projects** in a single unified database.
+Global installation is strongly recommended because:
+
+| Reason | Detail |
+|---|---|
+| **Single source of truth** | One binary serves every project — no version drift between projects |
+| **Hooks are user-scoped** | `~/.claude/settings.json` lives in your home directory, not per-project |
+| **Cross-project context** | Sessions from `app-a` and `app-b` share the same DB and search index |
+| **One update = everything refreshed** | `npm install -g <latest>` updates all projects at once; no per-project reinstall |
+| **`npm exec` resolves global first** | Hooks call `npm exec -- claude-hook-*` which finds the global package reliably regardless of cwd |
+
+**Important**: Even with global install, you can still **disable the hook for specific projects** (see below).
+Global ≠ forced on every project.
+
+### Disabling Hooks for Specific Projects
+
+Global install does **not** mean "always on everywhere". You have three layers of control:
+
+| Layer | File | Scope |
+|---|---|---|
+| 1. Global ON (default) | `~/.claude/settings.json` | All projects |
+| 2. Project-wide OFF | `<project>/.claude/settings.json` | Whole team (committed) |
+| 3. Personal-only OFF | `<project>/.claude/settings.local.json` | Just you (gitignored) |
+
+**To disable hooks in a specific project**, create the override file with empty hook arrays:
+
+```json
+// <project>/.claude/settings.json  (or settings.local.json for personal-only)
+{
+  "hooks": {
+    "SessionStart": [],
+    "UserPromptSubmit": [],
+    "PostToolUse": [],
+    "PreCompact": [],
+    "Stop": []
+  }
+}
+```
+
+Empty arrays override the global setting → that project's sessions are no longer tracked.
+
+### Updating to a New Version
+
+```bash
+npm install -g claude-session-continuity-mcp@latest
+```
+
+That's the only step — all projects pick up the new binary on next Claude Code restart.
+No need to reinstall in each project.
+
+### Alternative: Local Install (Not Recommended)
+
+If you really want per-project install (e.g., locked version for one project):
+```bash
+cd <project> && npm install claude-session-continuity-mcp
+```
+Drawback: you must install separately in every project, and `npm exec` may not find the local copy reliably from hook context (cwd-dependent). Stick with `-g` unless you have a specific reason.
 
 ### What Gets Installed
 

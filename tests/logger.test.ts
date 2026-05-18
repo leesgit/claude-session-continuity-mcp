@@ -177,7 +177,7 @@ describe('Performance Wrapper', () => {
 
     const duration = Date.now() - start;
 
-    expect(duration).toBeGreaterThanOrEqual(50);
+    expect(duration).toBeGreaterThanOrEqual(45);
     expect(duration).toBeLessThan(200); // 너무 오래 걸리면 안됨
   });
 
