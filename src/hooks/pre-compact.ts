@@ -231,6 +231,7 @@ function cleanPlaywrightCache(cwd: string) {
 }
 
 async function main() {
+  let cwdForErrorLog = process.cwd();
   try {
     let inputData = '';
     for await (const chunk of process.stdin) {
@@ -239,13 +240,22 @@ async function main() {
 
     const input: CompactInput = inputData ? JSON.parse(inputData) : {};
     const cwd = input.cwd || process.cwd();
+    cwdForErrorLog = cwd;
 
     // Playwright 캐시 정리 (20MB 컨텍스트 초과 방지)
     cleanPlaywrightCache(cwd);
     const project = detectProject(cwd);
     const dbPath = getDbPath(cwd);
 
+    // 디버그 로그 (DB 없어도 발화 자체는 기록)
+    const debugLogPath = path.join(path.dirname(dbPath), 'pre-compact-debug.log');
+    const transcriptLen = input.transcript?.length || 0;
+    const sid = input.sessionId?.slice(0, 8) || 'none';
+
     if (!fs.existsSync(dbPath)) {
+      try {
+        fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] project=${project} sid=${sid} transcript_msgs=${transcriptLen} status=no_db\n`);
+      } catch { /* ignore */ }
       process.stdout.write(JSON.stringify({ continue: true }));
       process.exit(0);
     }
@@ -277,7 +287,10 @@ async function main() {
     try {
       const directives = db.prepare(`
         SELECT directive, priority FROM user_directives
-        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 10
+        WHERE project = ?
+        ORDER BY CASE priority WHEN 'high' THEN 3 WHEN 'normal' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+                 created_at DESC
+        LIMIT 10
       `).all(project) as Array<{ directive: string; priority: string }>;
 
       if (directives.length > 0) {
@@ -324,14 +337,32 @@ async function main() {
 
     db.close();
 
+    const systemMessage = recoveryLines.join('\n');
+
+    // 디버그 로그 (성공 케이스)
+    try {
+      const factsCount = handover?.keyFacts.length || 0;
+      const errsCount = handover?.recentErrors.length || 0;
+      fs.appendFileSync(
+        debugLogPath,
+        `[${new Date().toISOString()}] project=${project} sid=${sid} transcript_msgs=${transcriptLen} sysmsg_len=${systemMessage.length} active_file=${handover?.activeFile || 'none'} pending=${handover?.pendingAction ? 'yes' : 'no'} facts=${factsCount} errs=${errsCount} status=ok\n`
+      );
+    } catch { /* ignore */ }
+
     const output = {
       continue: true,
-      systemMessage: recoveryLines.join('\n')
+      systemMessage
     };
     process.stdout.write(JSON.stringify(output));
     process.exit(0);
   } catch (e) {
     // fail-soft: 컴팩션이 멈추지 않도록 continue:true 반드시 반환
+    try {
+      const dbPath = getDbPath(cwdForErrorLog);
+      const debugLogPath = path.join(path.dirname(dbPath), 'pre-compact-debug.log');
+      const errMsg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] status=error err=${errMsg.slice(0, 200)}\n`);
+    } catch { /* ignore */ }
     process.stdout.write(JSON.stringify({ continue: true }));
     process.exit(0);
   }

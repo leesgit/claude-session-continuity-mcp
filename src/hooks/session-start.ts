@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
+import { logHookError } from '../utils/logger.js';
 
 interface SessionInput {
   cwd?: string;
@@ -145,7 +146,10 @@ function loadContext(dbPath: string, project: string): string | null {
     try {
       const directives = db.prepare(`
         SELECT directive, priority FROM user_directives
-        WHERE project = ? ORDER BY priority DESC, created_at DESC LIMIT 5
+        WHERE project = ?
+        ORDER BY CASE priority WHEN 'high' THEN 3 WHEN 'normal' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+                 created_at DESC
+        LIMIT 5
       `).all(project) as Array<{ directive: string; priority: string }>;
 
       if (directives.length > 0) {
@@ -194,21 +198,25 @@ function loadContext(dbPath: string, project: string): string | null {
     }
 
     // [Priority 5] 중요 메모리 (temporal decay 적용, 예산 내에서)
+    // P0 (2026-05-22): reference/observation 타입 + global(project=NULL) 메모리 포함
+    //   사용자 pain: "서버 주소 기억할 때도 있고 못할 때도 있다"
+    //   원인: SessionStart가 reference 타입 미포함 + project filter가 NULL 거름
     if (tokenBudget > 80) try {
       const memories = db.prepare(`
         SELECT content, memory_type, importance, created_at, access_count FROM memories
-        WHERE project = ?
-          AND memory_type IN ('decision', 'learning', 'error', 'preference')
+        WHERE (project = ? OR project IS NULL)
+          AND memory_type IN ('decision', 'learning', 'error', 'preference', 'reference', 'observation')
           AND importance >= 3
           AND (tags NOT LIKE '%auto-tracked%' OR tags IS NULL)
           AND (tags NOT LIKE '%auto-compact%' OR tags IS NULL)
-        ORDER BY importance DESC, accessed_at DESC LIMIT 20
+        ORDER BY importance DESC, accessed_at DESC LIMIT 30
       `).all(project) as Array<{ content: string; memory_type: string; importance: number; created_at: string; access_count: number }>;
 
       if (memories.length > 0) {
-        // Decay 적용 후 top 5 선택
+        // Decay 적용 후 top 5 선택 (reference는 decay 거의 0 — 인프라 정보는 영구)
         const DECAY_RATES: Record<string, number> = {
-          decision: 0.001, learning: 0.003, error: 0.01, preference: 0.002
+          decision: 0.001, learning: 0.003, error: 0.01, preference: 0.002,
+          reference: 0.0001, observation: 0.005
         };
         const scored = memories.map(m => {
           const ageDays = (Date.now() - new Date(m.created_at).getTime()) / (1000 * 60 * 60 * 24);
@@ -218,7 +226,8 @@ function loadContext(dbPath: string, project: string): string | null {
         }).sort((a, b) => b.score - a.score).slice(0, 5);
 
         const typeIcons: Record<string, string> = {
-          decision: '🎯', learning: '📚', error: '⚠️', preference: '💡'
+          decision: '🎯', learning: '📚', error: '⚠️', preference: '💡',
+          reference: '🔧', observation: '👁'
         };
         const memoryLines = ['## Key Memories'];
         for (const m of scored) {
@@ -288,7 +297,7 @@ async function main() {
 
     process.exit(0);
   } catch (e) {
-    // 에러 시 조용히 종료
+    logHookError('session-start', e);
     process.exit(0);
   }
 }

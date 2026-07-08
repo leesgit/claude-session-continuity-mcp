@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
+import { logHookError } from '../utils/logger.js';
 
 interface SessionEndInput {
   cwd?: string;
@@ -204,7 +205,11 @@ function extractNextTasks(content: string): string[] {
 /**
  * 사용자 메시지를 유효한 요청인지 필터링
  */
-function parseUserText(entry: { type?: string; message?: { content?: unknown } }): string {
+function parseUserText(entry: { type?: string; isMeta?: boolean; message?: { content?: unknown } }): string {
+  // 슬래시 커맨드 확장으로 주입된 메타 턴은 사용자 요청이 아님
+  // (예: "# /work - 프로젝트 작업 메인 명령어 (v2)…" 커맨드 본문 전체가 여기 들어옴)
+  if (entry.isMeta === true) return '';
+
   const content = entry.message?.content;
   let text = '';
   if (typeof content === 'string') {
@@ -214,6 +219,12 @@ function parseUserText(entry: { type?: string; message?: { content?: unknown } }
       .filter(b => b.type === 'text')
       .map(b => b.text || '')
       .join('\n');
+  }
+
+  // 슬래시 커맨드 실행 시 실제 사용자 요청은 <command-args> 안에 있음 → 삭제 말고 추출
+  const argsMatch = text.match(/<command-args>([\s\S]*?)<\/command-args>/);
+  if (argsMatch && argsMatch[1].trim().length >= 3) {
+    return argsMatch[1].trim();
   }
 
   // system-reminder, local-command 태그 제거
@@ -392,7 +403,9 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
   result.decisions = [...decisionSet].slice(0, 3);
 
   // Error-Fix pairs (한국어 패턴 보강)
-  const errorRe = /(?:error|Error|ERROR|오류|에러|버그|예외|실패|FAILED|Exception|TypeError|ReferenceError|SyntaxError|crash|crashed|충돌|문제)[:\s](.{5,80})/;
+  // P3 (2026-07-08): '충돌' 제거 — 영상 파이프라인 "충돌(collision) 컷" 잡담이
+  // 에러로 오분류되던 주 원인. 진짜 conflict 에러는 라틴 토큰으로 매칭됨.
+  const errorRe = /(?:error|Error|ERROR|오류|에러|버그|예외|실패|FAILED|Exception|TypeError|ReferenceError|SyntaxError|crash|crashed|문제)[:\s](.{5,80})/;
   const fixRe = /(?:fixed|resolved|patched|수정|해결|고침|처리|완료|변경|적용|반영|커밋|Added|수정 완료|문제 해결|해결됨|되돌림)/i;
   const pairSet = new Set<string>();
 
@@ -457,6 +470,29 @@ function jaccardSimilarity(a: string, b: string): number {
   for (const t of setA) if (setB.has(t)) intersect++;
   const union = setA.size + setB.size - intersect;
   return union === 0 ? 0 : intersect / union;
+}
+
+/**
+ * URL 정규화: 같은 도메인 + path는 같은 노이즈로 취급
+ * (P1-3, 2026-05-22) Google Forms ID, AdMob app ID 같은 동적 segment 제거
+ *
+ * 예: https://docs.google.com/forms/d/e/1FAIpQLScm.../viewform
+ *  →  https://docs.google.com/forms/...
+ */
+function normalizeUrls(text: string): string {
+  if (!text) return text;
+  return text.replace(/(https?:\/\/[^\s]+)/gi, (match) => {
+    try {
+      const url = new URL(match);
+      // path의 첫 1~2 segment만 유지, 나머지(ID/토큰)는 '...'로 축약
+      const segments = url.pathname.split('/').filter(s => s);
+      const keepCount = segments.length <= 2 ? segments.length : 2;
+      const truncated = segments.slice(0, keepCount).join('/');
+      return `${url.protocol}//${url.host}/${truncated}${segments.length > keepCount ? '/...' : ''}`;
+    } catch {
+      return match;
+    }
+  });
 }
 
 /**
@@ -690,27 +726,55 @@ async function main() {
       process.exit(0);
     }
 
-    // 중복 저장 방지 — Jaccard 유사도 기반 (1시간 이내, 동일 프로젝트)
-    // 베이스라인: 동일 last_work가 4~5분 간격으로 반복 INSERT되는 케이스 5건/24h 발견
-    // 정확 일치 + Jaccard >= 0.85 둘 다 차단
+    // 중복 저장 방지 — 3단계 dedup
+    // P1-3 (2026-05-22): Q8에서 발견된 3 클러스터(25 세션) 분석 결과
+    //   • Google Forms URL × 12 (1h~2h 간격) — URL 정규화 + 24h 윈도우로 해결
+    //   • IAP "이어서 진행해줘" × 8 (5h 분포, 동일 텍스트) — 24h exact로 해결
+    //   • AdMob URL × 5 — URL 정규화로 해결
+    // 1단계: 24시간 내 exact 일치 차단 (이전 1h → 24h, 동일 last_work 반복 막음)
+    // 2단계: URL 정규화 후 exact 일치 (Forms/AdMob ID 무시)
+    // 3단계: stripSlashPrefix 정규화 후 Jaccard >= 0.85 (1h 윈도우)
     const recentExact = db.prepare(`
       SELECT id FROM sessions
-      WHERE project = ? AND last_work = ? AND timestamp > datetime('now', '-1 hour')
+      WHERE project = ? AND last_work = ? AND timestamp > datetime('now', '-24 hour')
       LIMIT 1
     `).get(project, lastWork);
     if (recentExact) {
-      console.log(`[SessionEnd] Skipping duplicate (exact) for ${project}`);
+      console.log(`[SessionEnd] Skipping duplicate (exact, 24h) for ${project}`);
       db.close();
       process.exit(0);
     }
+
+    // 2단계: URL 정규화 후 exact (24h 윈도우)
+    const normalizedLastWorkUrl = normalizeUrls(lastWork);
+    if (normalizedLastWorkUrl !== lastWork) {
+      const recent24h = db.prepare(`
+        SELECT last_work FROM sessions
+        WHERE project = ? AND timestamp > datetime('now', '-24 hour')
+        ORDER BY timestamp DESC LIMIT 20
+      `).all(project) as Array<{ last_work: string }>;
+      for (const row of recent24h) {
+        if (!row.last_work) continue;
+        if (normalizeUrls(row.last_work) === normalizedLastWorkUrl) {
+          console.log(`[SessionEnd] Skipping URL-normalized duplicate for ${project}`);
+          db.close();
+          process.exit(0);
+        }
+      }
+    }
+
+    // 3단계: Jaccard 유사도 (24h 윈도우)
+    // P2 (2026-07-08): 1h 윈도우가 너무 좁아 시간 넘는 near-dup이 통과했음.
+    //   실측: /mcp-dev 클러스터 60건이 수 시간~수일 간격으로 반복 저장됨.
+    //   1·2단계(exact/URL)가 이미 24h이므로 Jaccard만 1h인 건 불일치 → 24h로 통일.
+    //   임계값 0.85는 매우 높아 "진짜 다른 작업"은 24h로 넓혀도 통과(Phase 4 검증).
     const recentRows = db.prepare(`
       SELECT last_work FROM sessions
-      WHERE project = ? AND timestamp > datetime('now', '-1 hour')
-      ORDER BY timestamp DESC LIMIT 10
+      WHERE project = ? AND timestamp > datetime('now', '-24 hour')
+      ORDER BY timestamp DESC LIMIT 30
     `).all(project) as Array<{ last_work: string }>;
     for (const row of recentRows) {
       if (!row.last_work) continue;
-      // Phase 5: 비교 전 양쪽 모두 stripSlashPrefix 정규화 → 표현 차이 흡수
       const normalizedCurrent = stripSlashPrefix(lastWork) || lastWork;
       const normalizedRow = stripSlashPrefix(row.last_work) || row.last_work;
       if (jaccardSimilarity(normalizedCurrent, normalizedRow) >= 0.85) {
@@ -728,27 +792,33 @@ async function main() {
     };
     const hasMetadata = commitMessages.length > 0 || decisions.length > 0 || errorsSolved.length > 0;
 
-    // 세션 duration 계산 (transcript first ↔ last timestamp)
-    let durationMinutes: number | null = null;
-    if (transcript.firstTimestamp && transcript.lastTimestamp) {
-      const start = new Date(transcript.firstTimestamp).getTime();
-      const end = new Date(transcript.lastTimestamp).getTime();
-      if (!isNaN(start) && !isNaN(end) && end >= start) {
-        durationMinutes = Math.round((end - start) / 60000);
-      }
-    }
+    // P3 (2026-07-08): duration_minutes 계산 폐기.
+    // transcript first↔last 차이는 resume/continue 시 벽시계 경과(최대 30일)를 담아
+    // 실측 33%가 24h 초과로 신뢰 불가였고, 이 필드를 읽는 소비처가 코드 전체에 없음.
+    // 컬럼은 스키마에 유지(NULL로 남김), INSERT만 중단.
 
-    // 세션 기록 저장
+    // 세션 기록 저장 — 원자적 조건부 INSERT로 페어 race 차단.
+    // P2b (2026-07-08): 두 hook 인스턴스가 같은 초에 동시 발화하면(transcript 락을
+    //   우회한 sid-less 페어) 앞 단계 dedup은 서로의 미커밋 행을 못 봐 둘 다 통과 →
+    //   id 897/898처럼 동일 last_work+timestamp 2행 저장(실측 재현).
+    //   INSERT ... WHERE NOT EXISTS로 "최근 10초 내 동일 project+last_work"를 원자적
+    //   단일 문장에서 재확인 → race 윈도우 제거. 10초 초과 정당한 재작업은 통과.
     db.prepare(`
-      INSERT INTO sessions (project, last_work, next_tasks, modified_files, issues, duration_minutes)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (project, last_work, next_tasks, modified_files, issues)
+      SELECT ?, ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM sessions
+        WHERE project = ? AND last_work = ?
+          AND timestamp > datetime('now', '-10 seconds')
+      )
     `).run(
       project,
       lastWork,
       JSON.stringify([...new Set(nextTasks)].slice(0, 5)),
       JSON.stringify(modifiedFiles.slice(0, 15)),
       hasMetadata ? JSON.stringify(metadata) : null,
-      durationMinutes
+      project,
+      lastWork
     );
 
     // 활성 컨텍스트 업데이트
@@ -762,19 +832,49 @@ async function main() {
     );
 
     // 에러→솔루션 자동 기록 (solutions 테이블)
+    // P1-4 (2026-05-22): 품질 필터 + 동일 solution 텍스트 dedup 추가
     let solutionsRecorded = 0;
     if (transcript.errorFixPairs.length > 0) {
       try {
         for (const pair of transcript.errorFixPairs) {
-          const existing = db.prepare(
+          const errSig = pair.error?.trim() || '';
+          const sol = pair.fix?.trim() || '';
+
+          // 품질 필터: stub/짧음/footer 거부
+          if (sol.length < 30) continue;
+          if (/^(\[이미\s*완료\]|✅\s*완료|✅\s*푸시\s*완료|done|완료)\s*$/i.test(sol)) continue;
+          if (sol.includes('Co-Authored-By:')) continue;
+          if (errSig.length < 5) continue;
+
+          // P3 (2026-07-08): error_signature 품질 게이트 — 대화 잡음 거부.
+          // errorRe가 '문제/충돌' 같은 일상어를 에러로 오분류해 내레이션 파편이
+          // 시그니처로 저장됐음(실측 28% 노이즈).
+          // 다국어(영어+한국어) 지원:
+          //   - 라틴 문자([A-Za-z])가 있으면 영어 에러(TypeError, Build failed,
+          //     ECONNREFUSED, undefined …)로 간주해 전부 통과.
+          //   - 라틴이 없는 순수 한국어는 구체적 에러 표현이 있을 때만 통과.
+          //   - 둘 다 없는 순수 파편(문제/충돌 단독)만 거부.
+          const hasErrorSignal =
+            /[A-Za-z]/.test(errSig) ||
+            /(실패|오류|누락|초과|깨짐|깨진|중단|크래시|안 ?됨|불가|타임아웃|한도)/.test(errSig);
+          if (!hasErrorSignal) continue;
+
+          // 1차 dedup: 동일 error_signature
+          const existingByError = db.prepare(
             'SELECT id FROM solutions WHERE project = ? AND error_signature = ? LIMIT 1'
-          ).get(project, pair.error);
-          if (!existing) {
-            db.prepare(
-              'INSERT INTO solutions (project, error_signature, solution) VALUES (?, ?, ?)'
-            ).run(project, pair.error, pair.fix);
-            solutionsRecorded++;
-          }
+          ).get(project, errSig);
+          if (existingByError) continue;
+
+          // 2차 dedup: 동일 solution 텍스트 (다른 error라도 같은 해법은 중복)
+          const existingBySol = db.prepare(
+            'SELECT id FROM solutions WHERE project = ? AND solution = ? LIMIT 1'
+          ).get(project, sol);
+          if (existingBySol) continue;
+
+          db.prepare(
+            'INSERT INTO solutions (project, error_signature, solution) VALUES (?, ?, ?)'
+          ).run(project, errSig, sol);
+          solutionsRecorded++;
         }
       } catch { /* solutions table may not exist */ }
     }
@@ -855,6 +955,7 @@ async function main() {
 
     process.exit(0);
   } catch (e) {
+    logHookError('session-end', e);
     process.exit(0);
   }
 }

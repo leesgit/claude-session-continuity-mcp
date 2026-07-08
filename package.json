@@ -1,6 +1,6 @@
 {
   "name": "claude-session-continuity-mcp",
-  "version": "1.13.2",
+  "version": "1.15.0",
   "description": "Session Continuity for Claude Code - Never re-explain your project again",
   "type": "module",
   "main": "dist/index.js",
@@ -60,7 +60,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@xenova/transformers": "^2.17.0",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.11.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {

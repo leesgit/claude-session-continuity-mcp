@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
+import { logHookError } from '../utils/logger.js';
 
 interface ToolUseInput {
   cwd?: string;
@@ -374,6 +375,7 @@ async function main() {
     db.close();
     process.exit(0);
   } catch (e) {
+    logHookError('post-tool-use', e);
     process.exit(0);
   }
 }

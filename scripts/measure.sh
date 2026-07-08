@@ -68,6 +68,8 @@ FROM memories GROUP BY memory_type ORDER BY cnt DESC;
 "
 
 # === 베이스라인 비교 (2026-05-12 Phase 2 직후) ===
+# STALE 2026-05-12 baseline — delta 추적용, 현재 상태 아님.
+# 2026-05-22 7-agent 검증 시점 live: sessions=134, memories=76, solutions=31 (~/.claude/sessions.db는 stale fallback이므로 위 DB=path 확인 필수).
 echo ""
 echo "## 베이스라인 (2026-05-12 Phase 2 직후) 대비"
 sqlite3 -column -header "$DB" "

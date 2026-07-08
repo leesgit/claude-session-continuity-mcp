@@ -1,12 +1,13 @@
-# claude-session-continuity-mcp (v1.13.2)
+# claude-session-continuity-mcp
 
-> **Zero Re-explanation Session Continuity for Claude Code** — Automatic context capture + semantic search + auto error→solution pipeline
+> **Never re-explain your project to Claude again.** 100% local session memory for Claude Code — auto context injection, semantic search, and error→solution recall. Zero config, zero API cost.
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen.svg)]()
-[![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)]()
 [![claude-session-continuity-mcp MCP server](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp/badges/card.svg)](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp)
+
+![Session continuity demo — Claude auto-restores your project context on session start](assets/demo.gif)
 
 ## The Problem
 
@@ -59,6 +60,24 @@ Every new Claude Code session:
 ```
 
 **Zero manual work. Context follows you.**
+
+---
+
+## Why this over other memory tools?
+
+Most Claude memory tools rely on **explicit tool calls** ("remember this"), a **cloud API**, or a **background AI worker**. This one is deliberately different:
+
+| | claude-session-continuity-mcp | Typical cloud/AI-memory MCP |
+|---|---|---|
+| **Setup** | `npm i -g` → hooks auto-install | Manual server + API key |
+| **Trigger** | 5 automatic hooks (no commands) | You call a `remember` tool |
+| **Storage** | 100% local SQLite | Cloud / external service |
+| **API cost** | **$0** — local embeddings | Per-token / subscription |
+| **Latency** | < 5ms (on-device) | Network round-trip |
+| **Privacy** | Never leaves your machine | Sent to a provider |
+| **Search** | FTS5 + local semantic, KO/EN/JA cross-lingual | Varies |
+
+If you want zero-config, offline, no-cost memory that just *happens* while you work — this is it.
 
 ---
 
@@ -635,3 +654,11 @@ PRs welcome! Please:
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
 - [Xenova Transformers](https://github.com/xenova/transformers.js) for embeddings
+
+---
+
+<div align="center">
+
+**If this saves you from re-explaining your project, consider giving it a ⭐ — it genuinely helps others find it.**
+
+</div>

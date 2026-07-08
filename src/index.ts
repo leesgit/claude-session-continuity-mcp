@@ -1711,41 +1711,82 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
             results = scored.filter(m => (m.similarity as number) > 0.3).slice(0, limit);
           }
         } else {
-          // LIKE 기반 키워드 검색 (FTS5보다 안정적)
-          // 검색어를 단어로 분리하여 OR 조건으로 검색
+          // FTS5 + bm25() 랭킹 우선, 결과 없으면 LIKE 폴백
+          // (P1-2, 2026-05-22: 7-agent 검증 후 적용)
           const words = query.split(/\s+/).filter(w => w.length > 0);
-          const likeConditions = words.map(() => '(content LIKE ? OR tags LIKE ?)').join(' OR ');
-          const likeParams: unknown[] = [];
-          words.forEach(w => {
-            likeParams.push(`%${w}%`, `%${w}%`);
-          });
 
-          let sql = `
-            SELECT * FROM memories
-            WHERE (${likeConditions || 'content LIKE ?'})
-            AND importance >= ?
-          `;
-          const params: unknown[] = [...(likeConditions ? likeParams : [`%${query}%`]), minImportance];
+          // 1차: FTS5 MATCH + bm25() 점수
+          let ftsResults: Array<Record<string, unknown>> = [];
+          try {
+            const ftsQuery = words.length > 0
+              ? words.map(w => `"${w.replace(/"/g, '""')}"`).join(' OR ')
+              : query;
+            let ftsSql = `
+              SELECT m.*, bm25(memories_fts) AS bm25_score
+              FROM memories_fts fts
+              JOIN memories m ON m.id = fts.rowid
+              WHERE memories_fts MATCH ?
+              AND m.importance >= ?
+            `;
+            const ftsParams: unknown[] = [ftsQuery, minImportance];
 
-          if (memoryType && memoryType !== 'all') {
-            sql += ` AND memory_type = ?`;
-            params.push(memoryType);
+            if (memoryType && memoryType !== 'all') {
+              ftsSql += ` AND m.memory_type = ?`;
+              ftsParams.push(memoryType);
+            }
+            if (project) {
+              ftsSql += ` AND m.project = ?`;
+              ftsParams.push(project);
+            }
+            if (tags && tags.length > 0) {
+              ftsSql += ` AND (${tags.map(() => 'm.tags LIKE ?').join(' OR ')})`;
+              ftsParams.push(...tags.map(t => `%"${t}"%`));
+            }
+            // bm25는 낮을수록 관련도 높음. importance 가중치 더해 종합 랭킹.
+            ftsSql += ` ORDER BY bm25_score ASC, m.importance DESC LIMIT ?`;
+            ftsParams.push(limit);
+
+            ftsResults = db.prepare(ftsSql).all(...ftsParams) as Array<Record<string, unknown>>;
+          } catch {
+            // FTS5 구문 오류(MATCH 토큰 이슈) 시 폴백
+            ftsResults = [];
           }
 
-          if (project) {
-            sql += ` AND project = ?`;
-            params.push(project);
+          if (ftsResults.length > 0) {
+            results = ftsResults;
+          } else {
+            // 2차 폴백: LIKE (FTS5 0건 시 — 한국어 부분일치 등)
+            const likeConditions = words.map(() => '(content LIKE ? OR tags LIKE ?)').join(' OR ');
+            const likeParams: unknown[] = [];
+            words.forEach(w => {
+              likeParams.push(`%${w}%`, `%${w}%`);
+            });
+
+            let sql = `
+              SELECT * FROM memories
+              WHERE (${likeConditions || 'content LIKE ?'})
+              AND importance >= ?
+            `;
+            const params: unknown[] = [...(likeConditions ? likeParams : [`%${query}%`]), minImportance];
+
+            if (memoryType && memoryType !== 'all') {
+              sql += ` AND memory_type = ?`;
+              params.push(memoryType);
+            }
+            if (project) {
+              sql += ` AND project = ?`;
+              params.push(project);
+            }
+            if (tags && tags.length > 0) {
+              sql += ` AND (${tags.map(() => 'tags LIKE ?').join(' OR ')})`;
+              params.push(...tags.map(t => `%"${t}"%`));
+            }
+
+            sql += ` ORDER BY importance DESC, accessed_at DESC LIMIT ?`;
+            params.push(limit);
+
+            results = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
           }
-
-          if (tags && tags.length > 0) {
-            sql += ` AND (${tags.map(() => 'tags LIKE ?').join(' OR ')})`;
-            params.push(...tags.map(t => `%"${t}"%`));
-          }
-
-          sql += ` ORDER BY importance DESC, accessed_at DESC LIMIT ?`;
-          params.push(limit);
-
-          results = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
         }
 
         // 접근 기록 업데이트

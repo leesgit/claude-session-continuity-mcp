@@ -139,3 +139,30 @@ class Logger {
 
 // 싱글톤 인스턴스
 export const logger = new Logger();
+
+/**
+ * Hook 치명적 오류 로거 — outer catch 전용.
+ *
+ * 배경: 2026-07-08, Node를 v26(ABI 147)로 업그레이드하면서 better-sqlite3
+ * 네이티브 모듈(ABI 141)이 로드 실패 → 5개 hook 전부 outer catch에서
+ * 조용히 exit(0). 18일간 세션이 한 건도 저장되지 않았는데 아무 흔적도 없었음.
+ * fail-soft는 유지하되, 반드시 흔적을 남긴다.
+ *
+ * 로그 위치: $HOOK_ERROR_LOG > cwd/.claude/hook-errors.log > ~/.claude/hook-errors.log
+ */
+export function logHookError(hook: string, err: unknown): void {
+  try {
+    const candidates = [
+      process.env.HOOK_ERROR_LOG,
+      path.join(process.cwd(), '.claude', 'hook-errors.log'),
+      path.join(process.env.HOME || '/tmp', '.claude', 'hook-errors.log'),
+    ].filter(Boolean) as string[];
+    const line = `[${new Date().toISOString()}] hook=${hook} ${err instanceof Error ? (err.stack || err.message) : String(err)}\n`;
+    for (const p of candidates) {
+      try {
+        fs.appendFileSync(p, line);
+        return;
+      } catch { /* try next candidate */ }
+    }
+  } catch { /* never throw from the error logger */ }
+}
