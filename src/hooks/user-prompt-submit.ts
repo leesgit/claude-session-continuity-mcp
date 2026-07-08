@@ -97,6 +97,10 @@ const STOPWORDS = new Set<string>([
   '하나','둘','셋','정말','진짜','아주','너무','매우','조금','약간','대충','그냥','일단',
   '그리고','하지만','그래서','그래도','근데','그런데','또는','또한','이런데','그런데',
   '진행','확인','시작','완료','종료','해줘','해주세요','부탁','알려','알려줘',
+  // 흔한 작업 동사·부사 (P1, 2026-07-08: 작은 코퍼스에서 df가 낮아 IDF를 통과해
+  //   오탐을 유발했음. "저장/기억/다시" 등이 GCP·영상 메모리를 엉뚱하게 소환)
+  '저장','기억','삭제','수정','검색','등록','변경','추가','제거','생성','실행','설정',
+  '전체','다시','이렇게','그렇게','저렇게','계속','먼저','바로','같이','제대로','하나하나',
   // 범용 명사 (LIKE 검색 시 아무 메모리나 잡는 오탐원 — 2026-07-08 C3)
   '이름','정보','내용','관련','부분','상태','방법','문제','경우','생각','이야기','얘기',
   '어떻게','무엇','뭐가','왜','어디','언제','어느','어떤','어떻','얼마',
@@ -105,6 +109,11 @@ const STOPWORDS = new Set<string>([
   // 영어 빈출 추가 — Next.js 같은 동음이의 발생하는 토큰
   'next','last','first','prev','previous','check','test','run','live','ready','verify','verification',
   'session','task','item','case','file','line','data','code','word','time','step','part','side',
+  // 영어 작업 동사 (P1 audit-7, 2026-07-08: 한국어 저장/기억/검색과 대칭. 이들이
+  //   df 낮아 IDF 통과 시 오탐 유발. inCorpus 게이트가 사후 방어하나 명시 차단이 견고)
+  'save','store','remember','search','find','delete','remove','update','create','add',
+  'change','edit','fix','make','show','list','get','set','build','lint','deploy',
+  'whole','thing','again','entire','stuff','something','anything','everything',
   // 영어 빈출 stopwords
   'the','a','an','is','are','was','were','be','been','being','have','has','had',
   'do','does','did','will','would','should','could','can','may','might','must',
@@ -136,6 +145,12 @@ function extractTriggerKeywords(prompt: string): string[] {
     .split(/[\s,.!?;:/\\|]+/)
     .map(t => t.trim().toLowerCase())
     .filter(t => /^[a-z0-9가-힣]+$/i.test(t)) // 영숫자+한글만
+    // P1 (2026-07-08): 흔한 한국어 동사 어미만 벗겨 stopword 체크가 먹게 함.
+    //   "저장해줘"→"저장"이 안 되면 STOPWORDS(저장)를 우회해 오탐.
+    //   ⚠️ 단일 글자 조사(로/를/이/가 등)는 절삭 금지 — "경로→경","추가→추"처럼
+    //      진짜 2글자 명사를 훼손함(실측 확인). 명확한 다글자 동사 어미만.
+    .map(t => t.replace(/(해줘|해주세요|해주라|했어|했지|하는|하고|해서|합니다|드려|드릴게)$/,''))
+    .filter(t => t.length > 0)
     .filter(t => {
       // 한국어 단일 음절은 거의 무의미, 2글자 이상 허용
       const hasHangul = /[가-힣]/.test(t);
@@ -173,16 +188,17 @@ function extractTriggerKeywords(prompt: string): string[] {
  *      토큰("Next.js")에 의해 false positive 발생. df=0 토큰은 FTS5 매칭에
  *      기여 0이므로 trigger 조건 자체에서 제외하는 게 맞음.
  *
- * @returns 살아남은 키워드 (희소한 의미 토큰만)
+ * @returns 살아남은 키워드 + 각 df (P1 audit-7 2026-07-08: df를 함께 반환해
+ *          searchTriggeredMemories의 inCorpus 재쿼리 제거)
  */
-function filterByIdf(db: Database.Database, keywords: string[]): string[] {
+function filterByIdf(db: Database.Database, keywords: string[]): Array<{ kw: string; df: number }> {
   if (keywords.length === 0) return [];
 
   try {
     const totalRow = db.prepare('SELECT COUNT(*) AS n FROM memories').get() as { n: number };
     const N = Math.max(totalRow.n, 1);
 
-    const survived: string[] = [];
+    const survived: Array<{ kw: string; df: number }> = [];
     const stmt = db.prepare('SELECT COUNT(*) AS df FROM memories_fts WHERE memories_fts MATCH ?');
 
     for (const kw of keywords) {
@@ -194,20 +210,20 @@ function filterByIdf(db: Database.Database, keywords: string[]): string[] {
         // 예: 메모리에 "비번"으로 적혔지만 사용자가 "비밀번호" 입력 → df=0, 그러나
         //     같이 추출된 "서명키"가 매칭해주면 trigger 정상 작동
         if (df === 0) {
-          survived.push(kw);
+          survived.push({ kw, df: 0 });
           continue;
         }
         const idf = Math.log(N / df);
         if (idf >= 2.0) {
-          survived.push(kw);
+          survived.push({ kw, df });
         }
       } catch {
-        survived.push(kw);  // FTS5 구문 오류 시 보수적으로 살림
+        survived.push({ kw, df: -1 });  // FTS5 구문 오류 시 보수적으로 살림 (df 불명=-1)
       }
     }
     return survived;
   } catch {
-    return keywords;  // DF 측정 실패 시 원본 그대로
+    return keywords.map(kw => ({ kw, df: -1 }));  // DF 측정 실패 시 원본 그대로
   }
 }
 
@@ -227,8 +243,17 @@ function searchTriggeredMemories(
   const meaningful = filterByIdf(db, keywords);
   if (meaningful.length < 2) return [];  // IDF 통과 토큰 2개 이상일 때만 trigger
 
+  // P1 (2026-07-08): 실제 코퍼스에 존재하는(df>0) 토큰이 2개 이상일 때만 trigger.
+  //   filterByIdf가 df=0 토큰(코퍼스에 없음)을 살려주는데, 그게 length>=2 게이트를
+  //   우회시켜 실질 단일 토큰 매칭으로 trigger되던 오탐 차단.
+  //   예: "gmail draft로 저장" → gmail(df=1) + draft로(df=0) → 실매칭 1개인데 trigger됐음.
+  //   audit-7 2026-07-08: filterByIdf가 반환한 df를 재사용(중복 쿼리 제거).
+  const inCorpus = meaningful.filter(m => m.df > 0);
+  if (inCorpus.length < 2) return [];
+  const meaningfulKws = meaningful.map(m => m.kw);
+
   try {
-    const ftsQuery = meaningful.map(k => `"${k.replace(/"/g, '""')}"`).join(' OR ');
+    const ftsQuery = meaningfulKws.map(k => `"${k.replace(/"/g, '""')}"`).join(' OR ');
     const projectFilter = project ? `AND (m.project = ? OR m.project IS NULL)` : '';
     const params: unknown[] = [ftsQuery];
     if (project) params.push(project);
@@ -270,7 +295,8 @@ function searchPastWork(db: Database.Database, keyword: string): PastWorkResult 
   const rawTokens = extractTriggerKeywords(keyword);
   if (rawTokens.length === 0) return result;
   // IDF로 흔한 토큰 추가 제거. 남는 게 없으면(전부 흔함) 검색 안 함.
-  const searchTokens = filterByIdf(db, rawTokens);
+  // audit-7 2026-07-08: filterByIdf가 {kw,df} 반환하도록 바뀜 → kw만 추출.
+  const searchTokens = filterByIdf(db, rawTokens).map(m => m.kw);
   if (searchTokens.length === 0) return result;
 
   // 1. sessions 검색 (최근 30일, 상위 3건) — 토큰 LIKE OR
