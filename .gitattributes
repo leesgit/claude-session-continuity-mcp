@@ -1,12 +1,14 @@
+# Language stats: this is a TypeScript project. Compiled/generated JS is excluded.
 package-lock.json linguist-generated=true linguist-vendored=true
 *.json linguist-generated=true
 
-# 언어 통계에서 제외 (실제 소스는 TypeScript src/)
+# Exclude compiled/generated output from language stats
 dist/** linguist-generated=true
 *.js linguist-generated=true
 *.mjs linguist-generated=true
 *.cjs linguist-generated=true
 tests/continuity-bench/** linguist-vendored=true
 
-# 소스로 집계할 것
-src/**/*.ts linguist-detectable=true
+# Force TypeScript detection on source
+*.ts linguist-language=TypeScript linguist-detectable=true
+src/**/*.ts linguist-language=TypeScript
