@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
 import { logHookError, emitContext } from '../utils/logger.js';
+import { tokenizeQuery } from '../utils/tokenize.js';
 
 interface PromptInput {
   prompt?: string;
@@ -87,91 +88,13 @@ function extractPastKeywords(prompt: string): string | null {
 }
 
 /**
- * Korean + English 일반 stopword
- * (Proactive trigger matching용 — 사용자 발상 "전부 기록하되 트리거 매칭" 구현)
- */
-const STOPWORDS = new Set<string>([
-  // 한국어 빈출 (조사/대명사/일반 동사/부사)
-  '있다','없다','하다','되다','이다','아니다','같다','보다','주다','받다','쓰다','놓다',
-  '하는','있는','없는','되는','이런','저런','그런','이게','저게','그게','이것','저것','그것',
-  '내가','네가','우리','저희','당신','자기','지금','이제','오늘','어제','내일','다음','이전',
-  '하나','둘','셋','정말','진짜','아주','너무','매우','조금','약간','대충','그냥','일단',
-  '그리고','하지만','그래서','그래도','근데','그런데','또는','또한','이런데','그런데',
-  '진행','확인','시작','완료','종료','해줘','해주세요','부탁','알려','알려줘',
-  // 흔한 작업 동사·부사 (P1, 2026-07-08: 작은 코퍼스에서 df가 낮아 IDF를 통과해
-  //   오탐을 유발했음. "저장/기억/다시" 등이 GCP·영상 메모리를 엉뚱하게 소환)
-  '저장','기억','삭제','수정','검색','등록','변경','추가','제거','생성','실행','설정',
-  '전체','다시','이렇게','그렇게','저렇게','계속','먼저','바로','같이','제대로','하나하나',
-  // 범용 명사 (LIKE 검색 시 아무 메모리나 잡는 오탐원 — 2026-07-08 C3)
-  '이름','정보','내용','관련','부분','상태','방법','문제','경우','생각','이야기','얘기',
-  '어떻게','무엇','뭐가','왜','어디','언제','어느','어떤','어떻','얼마',
-  // 한국어 2글자 빈출 (v1.14.3에서 한국어 길이 임계값 2로 낮춤에 따라 추가)
-  '이거','그거','저거','한번','두번','코드','작업','뭐했지','뭐였지','봐줘','한거지','했지',
-  // 영어 빈출 추가 — Next.js 같은 동음이의 발생하는 토큰
-  'next','last','first','prev','previous','check','test','run','live','ready','verify','verification',
-  'session','task','item','case','file','line','data','code','word','time','step','part','side',
-  // 영어 작업 동사 (P1 audit-7, 2026-07-08: 한국어 저장/기억/검색과 대칭. 이들이
-  //   df 낮아 IDF 통과 시 오탐 유발. inCorpus 게이트가 사후 방어하나 명시 차단이 견고)
-  'save','store','remember','search','find','delete','remove','update','create','add',
-  'change','edit','fix','make','show','list','get','set','build','lint','deploy',
-  'whole','thing','again','entire','stuff','something','anything','everything',
-  // 영어 빈출 stopwords
-  'the','a','an','is','are','was','were','be','been','being','have','has','had',
-  'do','does','did','will','would','should','could','can','may','might','must',
-  'this','that','these','those','it','its','they','them','their','we','our',
-  'you','your','i','my','me','what','when','where','why','how','which','who',
-  'and','or','but','if','then','else','also','so','as','at','by','for','from','in','of','on','to','with',
-  'just','only','very','really','also','too','still','here','there','now','then',
-]);
-
-/**
- * Prompt에서 의미 있는 한국어/영어 키워드 추출
- * (P0+ 2026-05-22: 사용자 "트리거 매칭" 발상 구현)
- *
- * @returns 키워드 배열 (3자 이상, stopword 제외, 중복 제거, 최대 5개)
+ * Prompt에서 의미 있는 한국어/영어 키워드 추출 (트리거용, 최대 5개)
+ * 토큰화 로직은 utils/tokenize.ts로 공용화됨 (memory_search와 공유, 2026-07-09).
+ * 트리거는 프롬프트 길이 5 미만이면 스킵.
  */
 function extractTriggerKeywords(prompt: string): string[] {
   if (!prompt || prompt.length < 5) return [];
-
-  // 1. 따옴표/괄호/마크다운/슬래시 명령 제거
-  const cleaned = prompt
-    .replace(/```[\s\S]*?```/g, ' ')        // 코드 블록
-    .replace(/`[^`]+`/g, ' ')                // 인라인 코드
-    .replace(/^\/[a-z-]+\s*/i, '')           // 슬래시 명령 prefix
-    .replace(/[*_~`"'()[\]{}<>]/g, ' ');     // 특수문자
-
-  // 2. 토큰화 (한글/영문 단어만)
-  // v1.14.3: 한국어 길이 임계값 2, 영어는 3 (한국어는 2글자 단어 많음 — 서버/주소/명령)
-  const tokens = cleaned
-    .split(/[\s,.!?;:/\\|]+/)
-    .map(t => t.trim().toLowerCase())
-    .filter(t => /^[a-z0-9가-힣]+$/i.test(t)) // 영숫자+한글만
-    // P1 (2026-07-08): 흔한 한국어 동사 어미만 벗겨 stopword 체크가 먹게 함.
-    //   "저장해줘"→"저장"이 안 되면 STOPWORDS(저장)를 우회해 오탐.
-    //   ⚠️ 단일 글자 조사(로/를/이/가 등)는 절삭 금지 — "경로→경","추가→추"처럼
-    //      진짜 2글자 명사를 훼손함(실측 확인). 명확한 다글자 동사 어미만.
-    .map(t => t.replace(/(해줘|해주세요|해주라|했어|했지|하는|하고|해서|합니다|드려|드릴게)$/,''))
-    .filter(t => t.length > 0)
-    .filter(t => {
-      // 한국어 단일 음절은 거의 무의미, 2글자 이상 허용
-      const hasHangul = /[가-힣]/.test(t);
-      return hasHangul ? t.length >= 2 : t.length >= 3;
-    })
-    .filter(t => !STOPWORDS.has(t))
-    .filter(t => !/^\d+$/.test(t));          // 숫자만은 제외
-
-  // 3. 중복 제거 (등장 순서 유지)
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const t of tokens) {
-    if (!seen.has(t)) {
-      seen.add(t);
-      unique.push(t);
-    }
-  }
-
-  // 4. 최대 5개
-  return unique.slice(0, 5);
+  return tokenizeQuery(prompt, 5);
 }
 
 /**

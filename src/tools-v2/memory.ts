@@ -4,6 +4,7 @@ import { db } from '../db/database.js';
 import { generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity } from '../utils/embedding.js';
 import { logger } from '../utils/logger.js';
 import { MemoryStoreSchema, MemorySearchSchema, MemoryGetSchema, MemoryDeleteSchema } from '../schemas.js';
+import { tokenizeQuery, buildFtsQuery } from '../utils/tokenize.js';
 import type { Tool, CallToolResult } from '../types.js';
 
 // ===== Temporal Decay =====
@@ -260,7 +261,11 @@ async function performFTSSearch(
   minImportance: number = 1,
   detail: boolean = false
 ): Promise<CallToolResult> {
-  const ftsQuery = query.split(/\s+/).filter(w => w.length > 1).join(' OR ');
+  // 공용 토큰화(어미 절삭+STOPWORDS+길이 필터)로 자동주입과 같은 검색 품질.
+  // 의미 토큰이 하나도 안 남으면(전부 stopword) raw split으로 폴백 — recall 보존.
+  const tokens = tokenizeQuery(query);
+  const ftsQuery = buildFtsQuery(tokens, true)  // expandEnglish: 복수/시제 변형 OR (영어권 recall)
+    ?? query.split(/\s+/).filter(w => w.length > 1).join(' OR ');
 
   let sql = `
     SELECT m.id, m.content, m.memory_type, m.tags, m.project, m.importance, m.created_at, m.access_count

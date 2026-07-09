@@ -29,6 +29,7 @@ import { mkdirSync, existsSync } from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import Database from 'better-sqlite3';
+import { tokenizeQuery, buildFtsQuery } from './utils/tokenize.js';
 
 // @xenova/transformers - 동적 import (sharp 의존성 문제 방지)
 let transformersModule: { pipeline: unknown; env: Record<string, unknown> } | null = null;
@@ -1419,7 +1420,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
           }
         } else {
           // 키워드 검색 (LIKE 기반, 단어별 OR)
-          const words = query.split(/\s+/).filter(w => w.length > 0);
+          // 2026-07-09 audit-7 방안A: 공용 토큰화(stopword 제거)로 흔한 단어가 아무
+          //   solution이나 잡는 오탐 감소. 의미 토큰이 없으면 raw split 폴백.
+          const solTokens = tokenizeQuery(query);
+          const words = solTokens.length > 0
+            ? solTokens
+            : query.split(/\s+/).filter(w => w.length > 0);
           const wordConditions = words.map(() =>
             '(error_signature LIKE ? OR error_message LIKE ? OR solution LIKE ? OR keywords LIKE ?)'
           ).join(' OR ');
@@ -1713,14 +1719,17 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
         } else {
           // FTS5 + bm25() 랭킹 우선, 결과 없으면 LIKE 폴백
           // (P1-2, 2026-05-22: 7-agent 검증 후 적용)
-          const words = query.split(/\s+/).filter(w => w.length > 0);
+          // 2026-07-09 audit-7 방안A: 공용 토큰화로 자동주입과 같은 한국어/다구 품질.
+          //   의미 토큰이 없으면 raw split 폴백(recall 보존).
+          const semanticTokens = tokenizeQuery(query);
+          const words = semanticTokens.length > 0
+            ? semanticTokens
+            : query.split(/\s+/).filter(w => w.length > 0);
 
           // 1차: FTS5 MATCH + bm25() 점수
           let ftsResults: Array<Record<string, unknown>> = [];
           try {
-            const ftsQuery = words.length > 0
-              ? words.map(w => `"${w.replace(/"/g, '""')}"`).join(' OR ')
-              : query;
+            const ftsQuery = buildFtsQuery(words, true) ?? query;  // expandEnglish: 영어 복수/시제 recall
             let ftsSql = `
               SELECT m.*, bm25(memories_fts) AS bm25_score
               FROM memories_fts fts
