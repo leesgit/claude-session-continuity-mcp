@@ -6,11 +6,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { logHookError } from '../utils/logger.js';
+import { logHookError, emitContext } from '../utils/logger.js';
 
 interface PromptInput {
   prompt?: string;
   cwd?: string;
+  transcript_path?: string;
 }
 
 function detectWorkspaceRoot(cwd: string): string {
@@ -526,7 +527,7 @@ async function main() {
           const pastSection = formatPastWork(pastWork);
           db.close();
           if (pastSection) {
-            console.log(`\n<past-context project="${project}">\n${pastSection}\n</past-context>\n`);
+            emitContext(`\n<past-context project="${project}">\n${pastSection}\n</past-context>\n`, 'UserPromptSubmit', input.transcript_path);
           }
         } catch { /* ignore */ }
       } else {
@@ -545,7 +546,7 @@ async function main() {
                 const content = m.content.length > 120 ? m.content.slice(0, 120) + '...' : m.content;
                 lines.push(`- [${m.memory_type}] ${content}`);
               }
-              console.log(`\n<triggered-context project="${project ?? 'global'}" keywords="${triggerKws.join(',')}">\n${lines.join('\n')}\n</triggered-context>\n`);
+              emitContext(`\n<triggered-context project="${project ?? 'global'}" keywords="${triggerKws.join(',')}">\n${lines.join('\n')}\n</triggered-context>\n`, 'UserPromptSubmit', input.transcript_path);
             }
           }
         } catch { /* ignore */ }

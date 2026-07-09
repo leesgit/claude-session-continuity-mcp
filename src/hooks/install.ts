@@ -20,6 +20,10 @@ const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
 const LEGACY_SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.local.json');
 const MCP_CONFIG_FILE = path.join(os.homedir(), '.claude.json');
 
+// Codex CLI (2026-07-09): hooks register in ~/.codex/hooks.json (same JSON shape as Claude)
+const CODEX_DIR = path.join(os.homedir(), '.codex');
+const CODEX_HOOKS_FILE = path.join(CODEX_DIR, 'hooks.json');
+
 // 설치된 패키지 경로 찾기
 function getPackagePath(): string {
   // 1. 글로벌 설치 확인
@@ -137,6 +141,41 @@ function installMcpServer(): boolean {
   }
 }
 
+/**
+ * Register the same hooks in ~/.codex/hooks.json for OpenAI Codex CLI (2026-07-09).
+ * Only runs if ~/.codex exists (Codex installed). Preserves user's existing hooks;
+ * replaces only ours (matched by the claude-hook- command prefix).
+ */
+function installCodexHooks(): void {
+  if (!fs.existsSync(CODEX_DIR)) return;  // Codex not installed -> skip silently
+
+  const OUR_PREFIX = 'claude-hook-';
+  let hooksConfig: { hooks?: Record<string, unknown[]> } = { hooks: {} };
+  if (fs.existsSync(CODEX_HOOKS_FILE)) {
+    try { hooksConfig = JSON.parse(fs.readFileSync(CODEX_HOOKS_FILE, 'utf-8')); }
+    catch { hooksConfig = { hooks: {} }; }
+  }
+  const hooks = hooksConfig.hooks || {};
+
+  const merge = (event: string, ourEntries: unknown[]): void => {
+    const existing = (hooks[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
+    const userEntries = existing.filter(e =>
+      !(e.hooks || []).some(h => h.command && h.command.includes(OUR_PREFIX)));
+    hooks[event] = [...userEntries, ...ourEntries];
+  };
+
+  // Codex uses the same event names as Claude (SessionStart/UserPromptSubmit/Stop...).
+  merge('SessionStart', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-start' }] }]);
+  merge('UserPromptSubmit', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt' }] }]);
+  merge('Stop', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-end' }] }]);
+
+  hooksConfig.hooks = hooks;
+  try {
+    fs.writeFileSync(CODEX_HOOKS_FILE, JSON.stringify(hooksConfig, null, 2));
+    console.log('✅ Codex CLI hooks installed (~/.codex/hooks.json)');
+  } catch { /* non-fatal: Codex hooks are optional */ }
+}
+
 function install(): void {
   console.log('');
   console.log('╔════════════════════════════════════════════════════════════╗');
@@ -199,6 +238,10 @@ function install(): void {
   settings.hooks = hooks;
   saveSettings(settings);
 
+  // Codex CLI hooks (2026-07-09): register the same hooks in ~/.codex/hooks.json
+  // if Codex is present. Hooks auto-detect the host and emit the right output format.
+  installCodexHooks();
+
   console.log('✅ Hooks installed (npm exec mode - works with local or global install!)');
   console.log('   SessionStart: context auto-load');
   console.log('   UserPromptSubmit: relevant memory injection');
@@ -259,6 +302,22 @@ function uninstall(): void {
   }
 
   saveSettings(settings);
+
+  // Also remove our hooks from Codex (2026-07-09), preserving user's hooks.
+  if (fs.existsSync(CODEX_HOOKS_FILE)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CODEX_HOOKS_FILE, 'utf-8')) as { hooks?: Record<string, unknown[]> };
+      const ch = cfg.hooks || {};
+      for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) {
+        const existing = (ch[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
+        const remaining = existing.filter(e => !(e.hooks || []).some(h => h.command && h.command.includes(OUR_PREFIX)));
+        if (remaining.length === 0) delete ch[event]; else ch[event] = remaining;
+      }
+      cfg.hooks = ch;
+      fs.writeFileSync(CODEX_HOOKS_FILE, JSON.stringify(cfg, null, 2));
+    } catch { /* non-fatal */ }
+  }
+
   console.log('✅ Hooks removed successfully!');
 }
 

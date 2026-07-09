@@ -6,11 +6,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { logHookError } from '../utils/logger.js';
+import { logHookError, emitContext } from '../utils/logger.js';
 
 interface SessionInput {
   cwd?: string;
   sessionId?: string;
+  transcript_path?: string;
 }
 
 function detectWorkspaceRoot(cwd: string): string {
@@ -290,9 +291,12 @@ async function main() {
     const context = loadContext(dbPath, project);
 
     if (context) {
-      console.log(`\n<session-context project="${project}">\n${context}\n</session-context>\n`);
+      emitContext(`\n<session-context project="${project}">\n${context}\n</session-context>\n`, 'SessionStart', input.transcript_path);
     } else {
-      console.log(`\n[Session] Project: ${project} (no context yet)\n`);
+      // Only Claude gets the "no context" placeholder; Codex would just get empty context.
+      if (!input.transcript_path || !input.transcript_path.includes('/.codex/')) {
+        console.log(`\n[Session] Project: ${project} (no context yet)\n`);
+      }
     }
 
     process.exit(0);

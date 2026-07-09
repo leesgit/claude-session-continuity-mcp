@@ -166,3 +166,27 @@ export function logHookError(hook: string, err: unknown): void {
     }
   } catch { /* never throw from the error logger */ }
 }
+
+/**
+ * Detect whether the hook is running under OpenAI Codex CLI (vs Claude Code).
+ * Codex stores transcripts at ~/.codex/sessions/...rollout-*.jsonl.
+ */
+export function isCodexHost(transcriptPath?: string): boolean {
+  if (!transcriptPath) return false;
+  return transcriptPath.includes('/.codex/sessions/') || /rollout-.*\.jsonl$/.test(transcriptPath);
+}
+
+/**
+ * Emit context to stdout in the host's expected format (Codex support, 2026-07-09).
+ * - Claude Code injects raw stdout text directly.
+ * - Codex CLI expects {hookSpecificOutput:{hookEventName, additionalContext}}.
+ */
+export function emitContext(context: string, hookEventName: string, transcriptPath?: string): void {
+  if (isCodexHost(transcriptPath)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName, additionalContext: context },
+    }));
+  } else {
+    console.log(context);
+  }
+}
