@@ -7,6 +7,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![claude-session-continuity-mcp MCP server](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp/badges/card.svg)](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp)
 
+**⚡ One install → context auto-loads every session · 🧩 survives compaction (0 re-explaining) · 🔒 100% local, $0 API**
+
 ![Session continuity demo — Claude auto-restores your project context on session start](assets/demo.gif)
 
 ## The Problem
@@ -78,6 +80,19 @@ Most Claude memory tools rely on **explicit tool calls** ("remember this"), a **
 | **Search** | FTS5 + local semantic, KO/EN/JA cross-lingual | Varies |
 
 If you want zero-config, offline, no-cost memory that just *happens* while you work — this is it.
+
+### Auto-injection vs. explicit search
+
+There's also a great class of **local search** tools (e.g. [ctx](https://github.com/ctxrs/ctx)) that index your agent history so you can *query* it (`search "failed migration"`). That's complementary, not the same job:
+
+| | claude-session-continuity-mcp | Local-search tools (ctx, etc.) |
+|---|---|---|
+| **How you use it** | **Automatic** — context appears on session start, no command | You (or the agent) run a search query |
+| **Compaction** | **PreCompact hook re-injects a handover** → 0 context re-explained after a compact | Not its job (it's a search index) |
+| **Best at** | *Never losing your thread* across sessions & compacts, hands-off | *Finding* a specific past decision/command on demand |
+| **Coverage** | Claude Code + Codex CLI (where auto-injection is possible) | Often 30+ agents indexed for search |
+
+Use search when you want to *look something up*. Use this when you want your context to *follow you* without asking.
 
 ---
 
