@@ -81,6 +81,24 @@ If you want zero-config, offline, no-cost memory that just *happens* while you w
 
 ---
 
+## Works with Codex CLI too (v1.16.0+)
+
+Beyond Claude Code, this also supports **OpenAI Codex CLI**. If `~/.codex` exists,
+the installer registers the same hooks in `~/.codex/hooks.json` (SessionStart,
+UserPromptSubmit, PreCompact, Stop), and the hooks auto-detect the host and emit
+the right output format (Codex's `hookSpecificOutput.additionalContext`).
+
+The same local `sessions.db` is shared, so context carries across both agents:
+what you did in Codex is available in Claude Code and vice versa.
+
+**Scope:** session save + context injection work on both. Codex file-change
+tracking (PostToolUse) isn't wired yet — session save already covers most of it
+via transcript parsing. Codex's `transcript_path` is treated as an unstable
+interface (it can be null at startup), so host detection uses an installer-injected
+`--codex` marker rather than relying on the path.
+
+---
+
 ## Quick Start
 
 ### Recommended: Global Installation
