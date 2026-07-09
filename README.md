@@ -1,6 +1,6 @@
 # claude-session-continuity-mcp
 
-> **Never re-explain your project to Claude again.** 100% local session memory for Claude Code — auto context injection, semantic search, and error→solution recall. Zero config, zero API cost.
+> **Never re-explain your project to your AI coding agent again.** 100% local session memory for **Claude Code & OpenAI Codex CLI** — auto context injection, semantic search, and error→solution recall. Zero config, zero API cost.
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
@@ -24,7 +24,7 @@ Every new Claude Code session:
 
 ## The Solution
 
-**Fully automatic.** Claude Hooks handle everything without manual calls:
+**Fully automatic.** Lifecycle hooks handle everything without manual calls — on **Claude Code** and **OpenAI Codex CLI**, sharing one local memory so context carries across both:
 
 ```bash
 # Session start → Auto-loads relevant context + recent session history

@@ -1,7 +1,7 @@
 {
   "name": "claude-session-continuity-mcp",
-  "version": "1.16.1",
-  "description": "Session Continuity for Claude Code - Never re-explain your project again",
+  "version": "1.16.2",
+  "description": "Session continuity for Claude Code & OpenAI Codex CLI - never re-explain your project again. 100% local, zero config, auto context injection.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -31,12 +31,16 @@
     "model-context-protocol",
     "claude",
     "claude-code",
+    "codex",
+    "codex-cli",
+    "openai",
     "ai",
     "context",
     "memory",
     "session",
     "continuity",
-    "anthropic"
+    "anthropic",
+    "agent-memory"
   ],
   "author": "Byeongchang Lee <leesgit@github.com>",
   "license": "MIT",
