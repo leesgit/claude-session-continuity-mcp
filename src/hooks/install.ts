@@ -165,9 +165,12 @@ function installCodexHooks(): void {
   };
 
   // Codex uses the same event names as Claude (SessionStart/UserPromptSubmit/Stop...).
-  merge('SessionStart', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-start' }] }]);
-  merge('UserPromptSubmit', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt' }] }]);
-  merge('Stop', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-end' }] }]);
+  // Append "--codex" so hooks detect the host reliably: Codex passes transcript_path
+  // as null at SessionStart, so the argv marker is the only dependable signal.
+  merge('SessionStart', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-start --codex' }] }]);
+  merge('UserPromptSubmit', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt --codex' }] }]);
+  merge('PreCompact', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-pre-compact --codex' }] }]);
+  merge('Stop', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-end --codex' }] }]);
 
   hooksConfig.hooks = hooks;
   try {
@@ -308,7 +311,7 @@ function uninstall(): void {
     try {
       const cfg = JSON.parse(fs.readFileSync(CODEX_HOOKS_FILE, 'utf-8')) as { hooks?: Record<string, unknown[]> };
       const ch = cfg.hooks || {};
-      for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop']) {
+      for (const event of ['SessionStart', 'UserPromptSubmit', 'PreCompact', 'Stop']) {
         const existing = (ch[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
         const remaining = existing.filter(e => !(e.hooks || []).some(h => h.command && h.command.includes(OUR_PREFIX)));
         if (remaining.length === 0) delete ch[event]; else ch[event] = remaining;

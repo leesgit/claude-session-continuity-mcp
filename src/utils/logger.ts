@@ -169,9 +169,16 @@ export function logHookError(hook: string, err: unknown): void {
 
 /**
  * Detect whether the hook is running under OpenAI Codex CLI (vs Claude Code).
- * Codex stores transcripts at ~/.codex/sessions/...rollout-*.jsonl.
+ *
+ * Two signals (either is sufficient):
+ *  1. A "--codex" argv marker injected by our installer into ~/.codex/hooks.json.
+ *     This is the reliable signal — Codex passes transcript_path as null at
+ *     SessionStart (fresh session, rollout not yet written), so path alone fails.
+ *  2. Transcript path under ~/.codex/sessions/...rollout-*.jsonl (fallback for
+ *     Stop/UserPromptSubmit where the rollout already exists).
  */
 export function isCodexHost(transcriptPath?: string): boolean {
+  if (process.argv.includes('--codex')) return true;
   if (!transcriptPath) return false;
   return transcriptPath.includes('/.codex/sessions/') || /rollout-.*\.jsonl$/.test(transcriptPath);
 }

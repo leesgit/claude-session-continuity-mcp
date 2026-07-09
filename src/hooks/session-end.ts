@@ -15,7 +15,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
-import { logHookError } from '../utils/logger.js';
+import { logHookError, isCodexHost } from '../utils/logger.js';
 
 interface SessionEndInput {
   cwd?: string;
@@ -357,7 +357,7 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return result;
 
   // Host detection: Codex uses ~/.codex/sessions/...rollout-*.jsonl, Claude uses ~/.claude/projects/...
-  const isCodex = transcriptPath.includes('/.codex/sessions/') || /rollout-.*\.jsonl$/.test(transcriptPath);
+  const isCodex = isCodexHost(transcriptPath);  // shared detection (argv marker or path)
 
   // commit 추출용 패턴
   const commitPatterns = [
