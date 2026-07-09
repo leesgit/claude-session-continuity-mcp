@@ -229,6 +229,8 @@ function parseUserText(entry: { type?: string; isMeta?: boolean; message?: { con
 
   // system-reminder, local-command 태그 제거
   text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  // Codex support (2026-07-09): Codex injects <environment_context> into the first user message -> strip it
+  text = text.replace(/<environment_context>[\s\S]*?<\/environment_context>/g, '').trim();
   text = text.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '').trim();
   text = text.replace(/<command-name>[\s\S]*?<\/command-name>/g, '').trim();
   text = text.replace(/<command-message>[\s\S]*?<\/command-message>/g, '').trim();
@@ -256,6 +258,73 @@ function extractTextFromContent(content: unknown): string {
       .join('\n');
   }
   return '';
+}
+
+/**
+ * Codex support (2026-07-09): normalize a Codex CLI rollout JSONL line into the
+ * Claude transcript entry shape, so the rest of parseTranscriptSinglePass
+ * (role/content/timestamp/commit/user-request extraction) can be reused as-is.
+ *
+ * Codex format: {timestamp, type, payload}
+ *   - payload.type=message, role=user/assistant, content[].text (input_text/output_text)
+ *   - payload.type=function_call, arguments={command:["zsh","-lc","git commit..."]}
+ *   - payload.type=session_meta (first line, ignored)
+ *   - reasoning/token_count etc. are ignored
+ * Returns a Claude-shaped entry ({type, timestamp, message:{content:[...]}}) or null (skip).
+ */
+function normalizeCodexLine(codexEntry: {
+  timestamp?: string;
+  type?: string;
+  payload?: {
+    type?: string;
+    role?: string;
+    content?: Array<{ type?: string; text?: string }>;
+    arguments?: string;
+  };
+}): { type: string; timestamp?: string; message: { content: unknown } } | null {
+  const p = codexEntry.payload;
+  if (!p) return null;
+  const ts = codexEntry.timestamp;
+
+  // 1. user/assistant message -> text block
+  if (p.type === 'message' && (p.role === 'user' || p.role === 'assistant')) {
+    const text = (p.content || [])
+      .filter(c => c.type === 'input_text' || c.type === 'output_text' || c.type === 'text')
+      .map(c => c.text || '')
+      .join('\n');
+    if (!text) return null;
+    return {
+      type: p.role === 'user' ? 'user' : 'assistant',
+      timestamp: ts,
+      message: { content: [{ type: 'text', text }] },
+    };
+  }
+
+  // 2. function_call(shell) -> tool_use block (for git commit extraction).
+  //    Codex passes command as an argv array (["zsh","-lc","git commit -m ..."]).
+  if (p.type === 'function_call' && p.arguments) {
+    let cmd = '';
+    try {
+      const args = JSON.parse(p.arguments) as { command?: string[] };
+      if (Array.isArray(args.command)) {
+        // Codex uses ["zsh","-lc","<actual cmd>"]. The commit regex requires
+        // "^git" or "&& git", so strip the shell wrapper (zsh/bash -lc/-c)
+        // and keep only the actual command.
+        const a = args.command;
+        cmd = (a.length >= 3 && /^(zsh|bash|sh)$/.test(a[0]) && /^-[lc]+$/.test(a[1]))
+          ? a.slice(2).join(' ')
+          : a.join(' ');
+      }
+    } catch { /* arguments not JSON -> skip */ }
+    if (!cmd) return null;
+    return {
+      type: 'assistant',
+      timestamp: ts,
+      message: { content: [{ type: 'tool_use', input: { command: cmd } }] },
+    };
+  }
+
+  return null;  // skip reasoning/token_count/session_meta etc.
 }
 
 interface TranscriptData {
@@ -287,6 +356,9 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
 
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return result;
 
+  // Host detection: Codex uses ~/.codex/sessions/...rollout-*.jsonl, Claude uses ~/.claude/projects/...
+  const isCodex = transcriptPath.includes('/.codex/sessions/') || /rollout-.*\.jsonl$/.test(transcriptPath);
+
   // commit 추출용 패턴
   const commitPatterns = [
     /git commit.*?-m\s*"\$\(cat <<'?EOF'?\n(.+?)(?:\n\n|\nCo-Authored|\nEOF)/s,
@@ -313,7 +385,10 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
     for await (const line of rl) {
       if (!line.trim()) continue;
       try {
-        const entry = JSON.parse(line);
+        const rawEntry = JSON.parse(line);
+        // For Codex, normalize the rollout line into a Claude entry shape. Skipped lines (reasoning etc.) return null.
+        const entry = isCodex ? normalizeCodexLine(rawEntry) : rawEntry;
+        if (!entry) continue;
         const role = entry.type || entry.role || '';
         const content = entry.message?.content;
 
