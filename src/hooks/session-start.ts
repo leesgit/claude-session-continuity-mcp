@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { logHookError, emitContext, isCodexHost } from '../utils/logger.js';
+import { logHookError, emitContext, isCodexHost, isGeminiHost } from '../utils/logger.js';
 
 interface SessionInput {
   cwd?: string;
@@ -293,8 +293,9 @@ async function main() {
     if (context) {
       emitContext(`\n<session-context project="${project}">\n${context}\n</session-context>\n`, 'SessionStart', input.transcript_path);
     } else {
-      // Only Claude gets the "no context" placeholder; Codex would just get empty context.
-      if (!isCodexHost(input.transcript_path)) {
+      // Only Claude gets the plain "no context" placeholder; Codex and Gemini
+      // expect JSON-only stdout, so a stray console.log would corrupt their parsing.
+      if (!isCodexHost(input.transcript_path) && !isGeminiHost(input.transcript_path)) {
         console.log(`\n[Session] Project: ${project} (no context yet)\n`);
       }
     }

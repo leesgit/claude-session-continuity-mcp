@@ -193,7 +193,10 @@ export function isCodexHost(transcriptPath?: string): boolean {
 export function isGeminiHost(transcriptPath?: string): boolean {
   if (process.argv.includes('--gemini')) return true;
   if (!transcriptPath) return false;
-  return transcriptPath.includes('/.gemini/tmp/') || transcriptPath.includes('/.gemini/');
+  // Gemini stores chats at ~/.gemini/tmp/<hash>/chats/*.jsonl. Match that specific
+  // path, NOT a bare "/.gemini/" — a Claude session run from a dir containing
+  // ".gemini" would otherwise be misclassified (audit-3 2026-07-10 finding).
+  return transcriptPath.includes('/.gemini/tmp/');
 }
 
 /**
