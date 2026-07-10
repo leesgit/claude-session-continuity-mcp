@@ -136,6 +136,12 @@ not this tool. Session continuity still works via the saved history.
 
 ## Quick Start
 
+> **Requires Node.js 22+.** The native `better-sqlite3` dependency only ships
+> prebuilt binaries for Node 22, 24, and 26 (the currently supported lines —
+> Node 18 and 20 are both end-of-life). On older Node it falls back to compiling
+> from source, which fails without build tools. Node 22 and up install cleanly
+> with no compiler needed.
+
 ### Recommended: Global Installation
 
 ```bash
