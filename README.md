@@ -1,6 +1,6 @@
 # claude-session-continuity-mcp
 
-> **Never re-explain your project to your AI coding agent again.** 100% local session memory for **Claude Code & OpenAI Codex CLI** — auto context injection, semantic search, and error→solution recall. Zero config, zero API cost.
+> **Never re-explain your project to your AI coding agent again.** 100% local session memory for **Claude Code, OpenAI Codex CLI & Google Gemini CLI** — auto context injection, semantic search, and error→solution recall. Zero config, zero API cost.
 
 [![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
@@ -26,7 +26,7 @@ Every new Claude Code session:
 
 ## The Solution
 
-**Fully automatic.** Lifecycle hooks handle everything without manual calls — on **Claude Code** and **OpenAI Codex CLI**, sharing one local memory so context carries across both:
+**Fully automatic.** Lifecycle hooks handle everything without manual calls — on **Claude Code**, **OpenAI Codex CLI**, and **Google Gemini CLI**, sharing one local memory so context carries across all three:
 
 ```bash
 # Session start → Auto-loads relevant context + recent session history
@@ -90,7 +90,7 @@ There's also a great class of **local search** tools (e.g. [ctx](https://github.
 | **How you use it** | **Automatic** — context appears on session start, no command | You (or the agent) run a search query |
 | **Compaction** | **PreCompact hook re-injects a handover** → 0 context re-explained after a compact | Not its job (it's a search index) |
 | **Best at** | *Never losing your thread* across sessions & compacts, hands-off | *Finding* a specific past decision/command on demand |
-| **Coverage** | Claude Code + Codex CLI (where auto-injection is possible) | Often 30+ agents indexed for search |
+| **Coverage** | Claude Code + Codex CLI + Gemini CLI (where auto-injection is possible) | Often 30+ agents indexed for search |
 
 Use search when you want to *look something up*. Use this when you want your context to *follow you* without asking.
 
