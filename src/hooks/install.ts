@@ -24,6 +24,10 @@ const MCP_CONFIG_FILE = path.join(os.homedir(), '.claude.json');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const CODEX_HOOKS_FILE = path.join(CODEX_DIR, 'hooks.json');
 
+// Gemini CLI (2026-07-10): hooks register inside ~/.gemini/settings.json under a "hooks" key
+const GEMINI_DIR = path.join(os.homedir(), '.gemini');
+const GEMINI_SETTINGS_FILE = path.join(GEMINI_DIR, 'settings.json');
+
 // 설치된 패키지 경로 찾기
 function getPackagePath(): string {
   // 1. 글로벌 설치 확인
@@ -179,6 +183,44 @@ function installCodexHooks(): void {
   } catch { /* non-fatal: Codex hooks are optional */ }
 }
 
+/**
+ * Register the same hooks in ~/.gemini/settings.json for Gemini CLI (2026-07-10).
+ * Only runs if ~/.gemini exists. Hooks live under a "hooks" key inside settings.json
+ * (not a separate file). Preserves the user's other settings and their own hooks;
+ * replaces only ours (matched by the claude-hook- command prefix).
+ * Gemini event names differ: BeforeAgent (≈UserPromptSubmit), PreCompress (≈PreCompact),
+ * SessionEnd (≈Stop). transcript_path can be null at SessionStart, so we inject "--gemini".
+ */
+function installGeminiHooks(): void {
+  if (!fs.existsSync(GEMINI_DIR)) return;  // Gemini not installed -> skip silently
+
+  const OUR_PREFIX = 'claude-hook-';
+  let settings: { hooks?: Record<string, unknown[]> } = {};
+  if (fs.existsSync(GEMINI_SETTINGS_FILE)) {
+    try { settings = JSON.parse(fs.readFileSync(GEMINI_SETTINGS_FILE, 'utf-8')); }
+    catch { settings = {}; }
+  }
+  const hooks = settings.hooks || {};
+
+  const merge = (event: string, ourEntries: unknown[]): void => {
+    const existing = (hooks[event] || []) as Array<{ command?: string }>;
+    const userEntries = existing.filter(e => !(e.command && e.command.includes(OUR_PREFIX)));
+    hooks[event] = [...userEntries, ...ourEntries];
+  };
+
+  // Gemini hook entries are flat {type, command} (no nested "hooks" array like Claude/Codex).
+  merge('SessionStart', [{ type: 'command', command: 'npm exec -- claude-hook-session-start --gemini' }]);
+  merge('BeforeAgent', [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt --gemini' }]);
+  merge('PreCompress', [{ type: 'command', command: 'npm exec -- claude-hook-pre-compact --gemini' }]);
+  merge('SessionEnd', [{ type: 'command', command: 'npm exec -- claude-hook-session-end --gemini' }]);
+
+  settings.hooks = hooks;
+  try {
+    fs.writeFileSync(GEMINI_SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    console.log('✅ Gemini CLI hooks installed (~/.gemini/settings.json)');
+  } catch { /* non-fatal: Gemini hooks are optional */ }
+}
+
 function install(): void {
   console.log('');
   console.log('╔════════════════════════════════════════════════════════════╗');
@@ -244,6 +286,9 @@ function install(): void {
   // Codex CLI hooks (2026-07-09): register the same hooks in ~/.codex/hooks.json
   // if Codex is present. Hooks auto-detect the host and emit the right output format.
   installCodexHooks();
+
+  // Gemini CLI hooks (2026-07-10): same, in ~/.gemini/settings.json if Gemini is present.
+  installGeminiHooks();
 
   console.log('✅ Hooks installed (npm exec mode - works with local or global install!)');
   console.log('   SessionStart: context auto-load');
@@ -318,6 +363,21 @@ function uninstall(): void {
       }
       cfg.hooks = ch;
       fs.writeFileSync(CODEX_HOOKS_FILE, JSON.stringify(cfg, null, 2));
+    } catch { /* non-fatal */ }
+  }
+
+  // Also remove our hooks from Gemini (2026-07-10), preserving user's settings + hooks.
+  if (fs.existsSync(GEMINI_SETTINGS_FILE)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(GEMINI_SETTINGS_FILE, 'utf-8')) as { hooks?: Record<string, unknown[]> };
+      const gh = cfg.hooks || {};
+      for (const event of ['SessionStart', 'BeforeAgent', 'PreCompress', 'SessionEnd']) {
+        const existing = (gh[event] || []) as Array<{ command?: string }>;
+        const remaining = existing.filter(e => !(e.command && e.command.includes(OUR_PREFIX)));
+        if (remaining.length === 0) delete gh[event]; else gh[event] = remaining;
+      }
+      cfg.hooks = gh;
+      fs.writeFileSync(GEMINI_SETTINGS_FILE, JSON.stringify(cfg, null, 2));
     } catch { /* non-fatal */ }
   }
 

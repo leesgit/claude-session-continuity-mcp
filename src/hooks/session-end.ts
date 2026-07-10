@@ -15,7 +15,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
-import { logHookError, isCodexHost } from '../utils/logger.js';
+import { logHookError, isCodexHost, isGeminiHost } from '../utils/logger.js';
 
 interface SessionEndInput {
   cwd?: string;
@@ -231,6 +231,8 @@ function parseUserText(entry: { type?: string; isMeta?: boolean; message?: { con
   text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   // Codex support (2026-07-09): Codex injects <environment_context> into the first user message -> strip it
   text = text.replace(/<environment_context>[\s\S]*?<\/environment_context>/g, '').trim();
+  // Gemini support (2026-07-10): Gemini injects <session_context> into the first user message -> strip it
+  text = text.replace(/<session_context>[\s\S]*?<\/session_context>/g, '').trim();
   text = text.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '').trim();
   text = text.replace(/<command-name>[\s\S]*?<\/command-name>/g, '').trim();
   text = text.replace(/<command-message>[\s\S]*?<\/command-message>/g, '').trim();
@@ -327,6 +329,43 @@ function normalizeCodexLine(codexEntry: {
   return null;  // skip reasoning/token_count/session_meta etc.
 }
 
+type ClaudeEntry = { type: string; timestamp?: string; message: { content: unknown } };
+type GeminiMsg = { type?: string; role?: string; timestamp?: string; content?: Array<{ text?: string }> };
+
+/** One Gemini message object -> Claude entry (or null to skip). */
+function geminiMsgToEntry(m: GeminiMsg): ClaudeEntry | null {
+  const t = m.type || m.role;  // some builds use role
+  if (t !== 'user' && t !== 'gemini' && t !== 'model' && t !== 'assistant') return null;
+  const text = (m.content || []).map(c => c.text || '').filter(Boolean).join('\n');
+  if (!text) return null;
+  return {
+    type: t === 'user' ? 'user' : 'assistant',
+    timestamp: m.timestamp,
+    message: { content: [{ type: 'text', text }] },
+  };
+}
+
+/**
+ * Normalize a Gemini CLI transcript line into Claude entries (2026-07-10).
+ * REAL Gemini format has two shapes (verified against actual ~/.gemini transcripts —
+ * the docs claimed only the flat shape, but older sessions use the $set diff shape):
+ *  A) flat:  {type:"user"|"gemini", content:[{text}], timestamp}
+ *  B) diff:  {"$set":{"messages":[ {type/role, content:[{text}]}, ... ]}}
+ * Top-level type:"info" lines and message_update patches are skipped.
+ * Returns an array (shape B can carry multiple messages per line).
+ */
+function normalizeGeminiLine(raw: unknown): ClaudeEntry | ClaudeEntry[] | null {
+  const entry = raw as { '$set'?: { messages?: GeminiMsg[] } } & GeminiMsg;
+  // Shape B: $set.messages array
+  const setMsgs = entry?.['$set']?.messages;
+  if (Array.isArray(setMsgs)) {
+    const out = setMsgs.map(geminiMsgToEntry).filter((e): e is ClaudeEntry => e !== null);
+    return out.length ? out : null;
+  }
+  // Shape A: flat message line
+  return geminiMsgToEntry(entry);
+}
+
 interface TranscriptData {
   commitMessages: string[];
   errorsSolved: string[];
@@ -356,8 +395,10 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
 
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return result;
 
-  // Host detection: Codex uses ~/.codex/sessions/...rollout-*.jsonl, Claude uses ~/.claude/projects/...
-  const isCodex = isCodexHost(transcriptPath);  // shared detection (argv marker or path)
+  // Host detection: Codex uses ~/.codex/sessions/...rollout-*.jsonl,
+  // Gemini uses ~/.gemini/tmp/.../chats/*.jsonl, Claude uses ~/.claude/projects/...
+  const isCodex = isCodexHost(transcriptPath);   // shared detection (argv marker or path)
+  const isGemini = isGeminiHost(transcriptPath);
 
   // commit 추출용 패턴
   const commitPatterns = [
@@ -386,9 +427,14 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
       if (!line.trim()) continue;
       try {
         const rawEntry = JSON.parse(line);
-        // For Codex, normalize the rollout line into a Claude entry shape. Skipped lines (reasoning etc.) return null.
-        const entry = isCodex ? normalizeCodexLine(rawEntry) : rawEntry;
-        if (!entry) continue;
+        // Normalize per host into Claude entry shape. Gemini's $set line can yield
+        // multiple entries, so unify everything into an array and process each.
+        const normalized = isCodex ? normalizeCodexLine(rawEntry)
+          : isGemini ? normalizeGeminiLine(rawEntry)
+          : rawEntry;
+        if (!normalized) continue;
+        const entries = Array.isArray(normalized) ? normalized : [normalized];
+        for (const entry of entries) {
         const role = entry.type || entry.role || '';
         const content = entry.message?.content;
 
@@ -453,6 +499,7 @@ async function parseTranscriptSinglePass(transcriptPath: string): Promise<Transc
           recentEntries.push({ role, text: text.slice(0, 500) });
           if (recentEntries.length > 30) recentEntries.shift();
         }
+        }  // end for (entry of entries)
 
       } catch { /* skip malformed lines */ }
     }

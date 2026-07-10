@@ -114,6 +114,26 @@ interface (it can be null at startup), so host detection uses an installer-injec
 
 ---
 
+## Works with Gemini CLI too (v1.17.0+)
+
+Also supports **Google Gemini CLI**. If `~/.gemini` exists, the installer registers
+the hooks in `~/.gemini/settings.json` (SessionStart, BeforeAgent, PreCompress,
+SessionEnd — Gemini's event names), preserving your other settings. Same shared
+local `sessions.db`, so context carries across all three agents.
+
+Gemini's transcript format was verified against real `~/.gemini/tmp/.../chats/*.jsonl`
+files — it uses **two shapes** (a flat `{type, content}` line and an older
+`{"$set":{"messages":[…]}}` diff line); the parser handles both. Like Codex,
+`transcript_path` can be null at startup, so host detection uses a `--gemini` marker.
+
+**Honest scope note:** session save (SessionEnd) and context output are verified working.
+Gemini's `SessionStart` context injection is documented as *advisory-only* upstream
+([gemini-cli#15413](https://github.com/google-gemini/gemini-cli/issues/15413)) — if your
+Gemini build doesn't render the injected context on startup, that's an upstream limit,
+not this tool. Session continuity still works via the saved history.
+
+---
+
 ## Quick Start
 
 ### Recommended: Global Installation

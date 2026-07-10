@@ -184,12 +184,25 @@ export function isCodexHost(transcriptPath?: string): boolean {
 }
 
 /**
- * Emit context to stdout in the host's expected format (Codex support, 2026-07-09).
+ * Detect whether the hook is running under Gemini CLI (Google), 2026-07-10.
+ * Same two-signal approach as Codex — Gemini's transcript_path can be null/stubbed
+ * at SessionStart (google-gemini/gemini-cli#14715), so the installer-injected
+ * "--gemini" argv marker is the reliable signal; the ~/.gemini/tmp/.../chats path
+ * is the fallback for later events.
+ */
+export function isGeminiHost(transcriptPath?: string): boolean {
+  if (process.argv.includes('--gemini')) return true;
+  if (!transcriptPath) return false;
+  return transcriptPath.includes('/.gemini/tmp/') || transcriptPath.includes('/.gemini/');
+}
+
+/**
+ * Emit context to stdout in the host's expected format.
  * - Claude Code injects raw stdout text directly.
- * - Codex CLI expects {hookSpecificOutput:{hookEventName, additionalContext}}.
+ * - Codex CLI and Gemini CLI both expect {hookSpecificOutput:{hookEventName, additionalContext}}.
  */
 export function emitContext(context: string, hookEventName: string, transcriptPath?: string): void {
-  if (isCodexHost(transcriptPath)) {
+  if (isCodexHost(transcriptPath) || isGeminiHost(transcriptPath)) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName, additionalContext: context },
     }));
