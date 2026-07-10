@@ -21,8 +21,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "dashboard": "node dist/dashboard.js",
-    "dashboard:v2": "node dist/dashboard-v2.js",
     "postinstall": "node dist/hooks/install.js install 2>/dev/null || true",
     "prepublishOnly": "npm run build && npm test"
   },
