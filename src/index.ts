@@ -27,7 +27,8 @@ import {
 import * as fs from 'fs/promises';
 import { mkdirSync, existsSync } from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { tokenizeQuery, buildFtsQuery } from './utils/tokenize.js';
 
@@ -2502,4 +2503,25 @@ async function main() {
   console.error('Project Manager MCP v5 started (24 tools + 3 prompts for auto-injection)');
 }
 
-main().catch(console.error);
+// CLI subcommands (install/uninstall/status/help) → delegate to the hooks installer.
+// Without this, `npx claude-session-continuity-mcp install` runs the default bin
+// (the MCP server), which ignores the arg and hangs on stdio — looks broken to users.
+const CLI_COMMANDS = new Set(['install', 'uninstall', 'remove', 'status']);
+const cliArg = process.argv[2];
+
+if (cliArg && (CLI_COMMANDS.has(cliArg) || cliArg === 'help' || cliArg === '--help' || cliArg === '-h')) {
+  if (cliArg === 'help' || cliArg === '--help' || cliArg === '-h') {
+    console.log('Usage: npx claude-session-continuity-mcp [install|uninstall|status]');
+    console.log('  install    Register lifecycle hooks for Claude Code / Codex CLI / Gemini CLI');
+    console.log('  uninstall  Remove the hooks');
+    console.log('  status     Show installed hooks');
+    console.log('  (no arg)   Start the MCP server (stdio) — used by the hook runtime');
+    process.exit(0);
+  }
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const installerPath = path.join(here, 'hooks', 'install.js');
+  const result = spawnSync(process.execPath, [installerPath, cliArg], { stdio: 'inherit' });
+  process.exit(result.status ?? 0);
+} else {
+  main().catch(console.error);
+}

@@ -1,6 +1,6 @@
 {
   "name": "claude-session-continuity-mcp",
-  "version": "1.17.1",
+  "version": "1.17.2",
   "description": "Session continuity for Claude Code, OpenAI Codex CLI & Google Gemini CLI - never re-explain your project again. 100% local, zero config, auto context injection.",
   "type": "module",
   "main": "dist/index.js",
