@@ -11,9 +11,11 @@
 
 ![Session continuity demo — Claude auto-restores your project context on session start](assets/demo.gif)
 
+> **Name note:** the package is called `claude-session-continuity-mcp` for historical reasons, but it is **agent-agnostic** — Claude Code, Codex CLI, and Gemini CLI are first-class and share one local memory.
+
 ## The Problem
 
-Every new Claude Code session:
+Every new session — whether you're in Claude Code, Codex CLI, or Gemini CLI:
 
 ```
 "This is a Next.js 15 project with App Router..."
@@ -96,7 +98,7 @@ Use search when you want to *look something up*. Use this when you want your con
 
 ---
 
-## Works with Codex CLI too (v1.16.0+)
+## Codex CLI support (v1.16.0+)
 
 Beyond Claude Code, this also supports **OpenAI Codex CLI**. If `~/.codex` exists,
 the installer registers the same hooks in `~/.codex/hooks.json` (SessionStart,
@@ -114,7 +116,7 @@ interface (it can be null at startup), so host detection uses an installer-injec
 
 ---
 
-## Works with Gemini CLI too (v1.17.0+)
+## Gemini CLI support (v1.17.0+)
 
 Also supports **Google Gemini CLI**. If `~/.gemini` exists, the installer registers
 the hooks in `~/.gemini/settings.json` (SessionStart, BeforeAgent, PreCompress,
