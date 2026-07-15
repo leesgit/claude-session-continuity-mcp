@@ -28,6 +28,21 @@ const CODEX_HOOKS_FILE = path.join(CODEX_DIR, 'hooks.json');
 const GEMINI_DIR = path.join(os.homedir(), '.gemini');
 const GEMINI_SETTINGS_FILE = path.join(GEMINI_DIR, 'settings.json');
 
+// Renamed to "passbaton" in v2.0.0 (2026-07-13). New installs write passbaton-hook-*,
+// but installs from <=1.17.x wrote claude-hook-*, and both bin names still ship.
+// Ownership matching must recognize BOTH prefixes, otherwise a v1 hook line would be
+// treated as a user's own hook and we'd append a duplicate next to it.
+const PKG_NAME = 'passbaton';
+const LEGACY_PKG_NAME = 'claude-session-continuity-mcp';
+const HOOK_PREFIX = 'passbaton-hook-';
+const LEGACY_HOOK_PREFIX = 'claude-hook-';
+
+/** True if this command string is one of ours (current or legacy naming). */
+function isOurHookCommand(command?: string): boolean {
+  if (!command) return false;
+  return command.includes(HOOK_PREFIX) || command.includes(LEGACY_HOOK_PREFIX);
+}
+
 // 설치된 패키지 경로 찾기
 function getPackagePath(): string {
   // 1. 글로벌 설치 확인
@@ -36,12 +51,14 @@ function getPackagePath(): string {
     return globalPath;
   }
 
-  // 2. 로컬 node_modules 확인
+  // 2. 로컬 node_modules 확인 (새 이름 우선, 1.x 설치는 옛 이름으로 폴백)
   let current = process.cwd();
   while (current !== path.parse(current).root) {
-    const candidate = path.join(current, 'node_modules', 'claude-session-continuity-mcp', 'dist', 'hooks');
-    if (fs.existsSync(candidate)) {
-      return path.join(current, 'node_modules', 'claude-session-continuity-mcp', 'dist');
+    for (const pkg of [PKG_NAME, LEGACY_PKG_NAME]) {
+      const candidate = path.join(current, 'node_modules', pkg, 'dist', 'hooks');
+      if (fs.existsSync(candidate)) {
+        return path.join(current, 'node_modules', pkg, 'dist');
+      }
     }
     current = path.dirname(current);
   }
@@ -122,7 +139,7 @@ function installMcpServer(): boolean {
     // MCP 서버 등록
     mcpServers['project-manager'] = {
       command: 'npx',
-      args: ['claude-session-continuity-mcp']
+      args: [PKG_NAME]
     };
 
     config.mcpServers = mcpServers;
@@ -137,7 +154,7 @@ function installMcpServer(): boolean {
     console.log('     "mcpServers": {');
     console.log('       "project-manager": {');
     console.log('         "command": "npx",');
-    console.log('         "args": ["claude-session-continuity-mcp"]');
+    console.log(`         "args": ["${PKG_NAME}"]`);
     console.log('       }');
     console.log('     }');
     console.log('   }');
@@ -153,7 +170,6 @@ function installMcpServer(): boolean {
 function installCodexHooks(): void {
   if (!fs.existsSync(CODEX_DIR)) return;  // Codex not installed -> skip silently
 
-  const OUR_PREFIX = 'claude-hook-';
   let hooksConfig: { hooks?: Record<string, unknown[]> } = { hooks: {} };
   if (fs.existsSync(CODEX_HOOKS_FILE)) {
     try { hooksConfig = JSON.parse(fs.readFileSync(CODEX_HOOKS_FILE, 'utf-8')); }
@@ -164,17 +180,17 @@ function installCodexHooks(): void {
   const merge = (event: string, ourEntries: unknown[]): void => {
     const existing = (hooks[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
     const userEntries = existing.filter(e =>
-      !(e.hooks || []).some(h => h.command && h.command.includes(OUR_PREFIX)));
+      !(e.hooks || []).some(h => isOurHookCommand(h.command)));
     hooks[event] = [...userEntries, ...ourEntries];
   };
 
   // Codex uses the same event names as Claude (SessionStart/UserPromptSubmit/Stop...).
   // Append "--codex" so hooks detect the host reliably: Codex passes transcript_path
   // as null at SessionStart, so the argv marker is the only dependable signal.
-  merge('SessionStart', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-start --codex' }] }]);
-  merge('UserPromptSubmit', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt --codex' }] }]);
-  merge('PreCompact', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-pre-compact --codex' }] }]);
-  merge('Stop', [{ hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-end --codex' }] }]);
+  merge('SessionStart', [{ hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}session-start --codex` }] }]);
+  merge('UserPromptSubmit', [{ hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}user-prompt --codex` }] }]);
+  merge('PreCompact', [{ hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}pre-compact --codex` }] }]);
+  merge('Stop', [{ hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}session-end --codex` }] }]);
 
   hooksConfig.hooks = hooks;
   try {
@@ -194,7 +210,6 @@ function installCodexHooks(): void {
 function installGeminiHooks(): void {
   if (!fs.existsSync(GEMINI_DIR)) return;  // Gemini not installed -> skip silently
 
-  const OUR_PREFIX = 'claude-hook-';
   let settings: { hooks?: Record<string, unknown[]> } = {};
   if (fs.existsSync(GEMINI_SETTINGS_FILE)) {
     try { settings = JSON.parse(fs.readFileSync(GEMINI_SETTINGS_FILE, 'utf-8')); }
@@ -204,15 +219,15 @@ function installGeminiHooks(): void {
 
   const merge = (event: string, ourEntries: unknown[]): void => {
     const existing = (hooks[event] || []) as Array<{ command?: string }>;
-    const userEntries = existing.filter(e => !(e.command && e.command.includes(OUR_PREFIX)));
+    const userEntries = existing.filter(e => !isOurHookCommand(e.command));
     hooks[event] = [...userEntries, ...ourEntries];
   };
 
   // Gemini hook entries are flat {type, command} (no nested "hooks" array like Claude/Codex).
-  merge('SessionStart', [{ type: 'command', command: 'npm exec -- claude-hook-session-start --gemini' }]);
-  merge('BeforeAgent', [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt --gemini' }]);
-  merge('PreCompress', [{ type: 'command', command: 'npm exec -- claude-hook-pre-compact --gemini' }]);
-  merge('SessionEnd', [{ type: 'command', command: 'npm exec -- claude-hook-session-end --gemini' }]);
+  merge('SessionStart', [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}session-start --gemini` }]);
+  merge('BeforeAgent', [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}user-prompt --gemini` }]);
+  merge('PreCompress', [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}pre-compact --gemini` }]);
+  merge('SessionEnd', [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}session-end --gemini` }]);
 
   settings.hooks = hooks;
   try {
@@ -239,12 +254,9 @@ function install(): void {
   // 기존 hooks 유지하면서 우리 훅만 추가/교체
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
 
-  // 우리 훅 명령어 prefix (이걸로 우리 훅인지 판별)
-  const OUR_PREFIX = 'claude-hook-';
-
   /**
    * 기존 훅 배열에서 우리 훅만 제거하고, 새 훅을 추가
-   * 사용자 커스텀 훅은 보존됨
+   * 사용자 커스텀 훅은 보존됨 (우리 훅 판별 = isOurHookCommand, 신/구 이름 모두 인식)
    */
   function mergeHooks(event: string, ourEntries: unknown[]): void {
     const existing = (hooks[event] || []) as Array<{ hooks?: Array<{ command?: string }>; matcher?: string }>;
@@ -252,7 +264,7 @@ function install(): void {
     // 기존 항목 중 우리 훅이 아닌 것만 보존
     const userEntries = existing.filter(entry => {
       const cmds = entry.hooks || [];
-      return !cmds.some(h => h.command && h.command.includes(OUR_PREFIX));
+      return !cmds.some(h => isOurHookCommand(h.command));
     });
 
     // 사용자 훅 먼저, 우리 훅 뒤에 추가
@@ -260,24 +272,24 @@ function install(): void {
   }
 
   mergeHooks('SessionStart', [
-    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-start' }] }
+    { hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}session-start` }] }
   ]);
 
   mergeHooks('UserPromptSubmit', [
-    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-user-prompt' }] }
+    { hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}user-prompt` }] }
   ]);
 
   mergeHooks('PostToolUse', [
-    { matcher: 'Edit', hooks: [{ type: 'command', command: 'npm exec -- claude-hook-post-tool' }] },
-    { matcher: 'Write', hooks: [{ type: 'command', command: 'npm exec -- claude-hook-post-tool' }] }
+    { matcher: 'Edit', hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}post-tool` }] },
+    { matcher: 'Write', hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}post-tool` }] }
   ]);
 
   mergeHooks('PreCompact', [
-    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-pre-compact' }] }
+    { hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}pre-compact` }] }
   ]);
 
   mergeHooks('Stop', [
-    { hooks: [{ type: 'command', command: 'npm exec -- claude-hook-session-end' }] }
+    { hooks: [{ type: 'command', command: `npm exec -- ${HOOK_PREFIX}session-end` }] }
   ]);
 
   settings.hooks = hooks;
@@ -326,14 +338,13 @@ function uninstall(): void {
 
   const settings = loadSettings();
   const hooks = (settings.hooks as Record<string, unknown[]>) || {};
-  const OUR_PREFIX = 'claude-hook-';
 
-  // 각 이벤트에서 우리 훅만 제거, 사용자 훅은 보존
+  // 각 이벤트에서 우리 훅만 제거, 사용자 훅은 보존 (신/구 이름 모두 제거)
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact', 'Stop']) {
     const existing = (hooks[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
     const remaining = existing.filter(entry => {
       const cmds = entry.hooks || [];
-      return !cmds.some(h => h.command && h.command.includes(OUR_PREFIX));
+      return !cmds.some(h => isOurHookCommand(h.command));
     });
 
     if (remaining.length === 0) {
@@ -358,7 +369,7 @@ function uninstall(): void {
       const ch = cfg.hooks || {};
       for (const event of ['SessionStart', 'UserPromptSubmit', 'PreCompact', 'Stop']) {
         const existing = (ch[event] || []) as Array<{ hooks?: Array<{ command?: string }> }>;
-        const remaining = existing.filter(e => !(e.hooks || []).some(h => h.command && h.command.includes(OUR_PREFIX)));
+        const remaining = existing.filter(e => !(e.hooks || []).some(h => isOurHookCommand(h.command)));
         if (remaining.length === 0) delete ch[event]; else ch[event] = remaining;
       }
       cfg.hooks = ch;
@@ -373,7 +384,7 @@ function uninstall(): void {
       const gh = cfg.hooks || {};
       for (const event of ['SessionStart', 'BeforeAgent', 'PreCompress', 'SessionEnd']) {
         const existing = (gh[event] || []) as Array<{ command?: string }>;
-        const remaining = existing.filter(e => !(e.command && e.command.includes(OUR_PREFIX)));
+        const remaining = existing.filter(e => !isOurHookCommand(e.command));
         if (remaining.length === 0) delete gh[event]; else gh[event] = remaining;
       }
       cfg.hooks = gh;
@@ -427,5 +438,5 @@ switch (command) {
     status();
     break;
   default:
-    console.log('Usage: npx claude-session-continuity-hooks [install|uninstall|status]');
+    console.log('Usage: npx passbaton-hooks [install|uninstall|status]');
 }

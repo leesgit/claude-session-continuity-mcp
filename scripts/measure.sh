@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-session-continuity-mcp 가치 측정 스크립트
+# passbaton 가치 측정 스크립트
 # 사용: bash scripts/measure.sh
 # 출력: 베이스라인 대비 sessions/memories/solutions/duration 변화 + 자동 추출 효과
 
@@ -13,7 +13,7 @@ if [ ! -f "$DB" ]; then
 fi
 
 echo "==================================================================="
-echo "  claude-session-continuity-mcp 가치 측정 — $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  passbaton 가치 측정 — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "  DB: $DB"
 echo "==================================================================="
 

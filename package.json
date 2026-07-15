@@ -1,10 +1,17 @@
 {
-  "name": "claude-session-continuity-mcp",
-  "version": "1.17.2",
-  "description": "Session continuity for Claude Code, OpenAI Codex CLI & Google Gemini CLI - never re-explain your project again. 100% local, zero config, auto context injection.",
+  "name": "passbaton",
+  "version": "2.0.0",
+  "description": "Session continuity and persistent memory for Claude Code, OpenAI Codex CLI & Google Gemini CLI. Auto-injects past context on start, survives compaction, shares one local db across all three. 100% local SQLite, zero API cost.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
+    "passbaton": "dist/index.js",
+    "passbaton-hooks": "dist/hooks/install.js",
+    "passbaton-hook-session-start": "dist/hooks/session-start.js",
+    "passbaton-hook-user-prompt": "dist/hooks/user-prompt-submit.js",
+    "passbaton-hook-post-tool": "dist/hooks/post-tool-use.js",
+    "passbaton-hook-pre-compact": "dist/hooks/pre-compact.js",
+    "passbaton-hook-session-end": "dist/hooks/session-end.js",
     "claude-session-continuity-mcp": "dist/index.js",
     "claude-session-hooks": "dist/hooks/install.js",
     "claude-hook-session-start": "dist/hooks/session-start.js",
@@ -29,6 +36,8 @@
     "model-context-protocol",
     "claude",
     "claude-code",
+    "claude-code-memory",
+    "claude-code-hooks",
     "codex",
     "codex-cli",
     "openai",
@@ -40,19 +49,29 @@
     "memory",
     "session",
     "continuity",
+    "session-continuity",
+    "session-memory",
+    "persistent-memory",
+    "agent-memory",
+    "coding-agent",
+    "ai-agent",
+    "compaction",
+    "context-injection",
+    "local-first",
+    "sqlite",
     "anthropic",
-    "agent-memory"
+    "passbaton"
   ],
   "author": "Byeongchang Lee <leesgit@github.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/leesgit/claude-session-continuity-mcp.git"
+    "url": "git+https://github.com/leesgit/passbaton.git"
   },
   "bugs": {
-    "url": "https://github.com/leesgit/claude-session-continuity-mcp/issues"
+    "url": "https://github.com/leesgit/passbaton/issues"
   },
-  "homepage": "https://github.com/leesgit/claude-session-continuity-mcp#readme",
+  "homepage": "https://github.com/leesgit/passbaton#readme",
   "files": [
     "dist",
     "dist/hooks",

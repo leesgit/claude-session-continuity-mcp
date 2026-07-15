@@ -2504,14 +2504,14 @@ async function main() {
 }
 
 // CLI subcommands (install/uninstall/status/help) → delegate to the hooks installer.
-// Without this, `npx claude-session-continuity-mcp install` runs the default bin
+// Without this, `npx passbaton install` runs the default bin
 // (the MCP server), which ignores the arg and hangs on stdio — looks broken to users.
 const CLI_COMMANDS = new Set(['install', 'uninstall', 'remove', 'status']);
 const cliArg = process.argv[2];
 
 if (cliArg && (CLI_COMMANDS.has(cliArg) || cliArg === 'help' || cliArg === '--help' || cliArg === '-h')) {
   if (cliArg === 'help' || cliArg === '--help' || cliArg === '-h') {
-    console.log('Usage: npx claude-session-continuity-mcp [install|uninstall|status]');
+    console.log('Usage: npx passbaton [install|uninstall|status]');
     console.log('  install    Register lifecycle hooks for Claude Code / Codex CLI / Gemini CLI');
     console.log('  uninstall  Remove the hooks');
     console.log('  status     Show installed hooks');

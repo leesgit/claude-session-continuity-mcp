@@ -1,17 +1,16 @@
-# claude-session-continuity-mcp
+# passbaton
 
-> **Never re-explain your project to your AI coding agent again.** 100% local session memory for **Claude Code, OpenAI Codex CLI & Google Gemini CLI** — auto context injection, semantic search, and error→solution recall. Zero config, zero API cost.
+> **Session continuity for AI coding agents.** Your agent picks up where it left off — never re-explain your project again. Persistent memory for **Claude Code, OpenAI Codex CLI & Google Gemini CLI**, sharing one local db: auto context injection, compaction handover, semantic search, and error→solution recall. Zero config, zero API cost, 100% local.
 
-[![npm version](https://img.shields.io/npm/v/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/claude-session-continuity-mcp.svg)](https://www.npmjs.com/package/claude-session-continuity-mcp)
+[![npm version](https://img.shields.io/npm/v/passbaton.svg)](https://www.npmjs.com/package/passbaton)
+[![npm downloads](https://img.shields.io/npm/dm/passbaton.svg)](https://www.npmjs.com/package/passbaton)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![claude-session-continuity-mcp MCP server](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp/badges/card.svg)](https://glama.ai/mcp/servers/leesgit/claude-session-continuity-mcp)
 
 **⚡ One install → context auto-loads every session · 🧩 survives compaction (0 re-explaining) · 🔒 100% local, $0 API**
 
-![Session continuity demo — Claude auto-restores your project context on session start](assets/demo.gif)
+![Session continuity demo — your coding agent auto-restores project context on session start](assets/demo.gif)
 
-> **Name note:** the package is called `claude-session-continuity-mcp` for historical reasons, but it is **agent-agnostic** — Claude Code, Codex CLI, and Gemini CLI are first-class and share one local memory.
+> **Renamed (v2.0.0):** this project was previously `claude-session-continuity-mcp`. The old name suggested it was Claude-only — it never was. **Claude Code, Codex CLI, and Gemini CLI are all first-class and share one local memory.** Existing installs keep working: the old `claude-hook-*` commands still ship as aliases. See [Migrating from v1](#migrating-from-v1).
 
 ## The Problem
 
@@ -71,7 +70,7 @@ Every new session — whether you're in Claude Code, Codex CLI, or Gemini CLI:
 
 Most Claude memory tools rely on **explicit tool calls** ("remember this"), a **cloud API**, or a **background AI worker**. This one is deliberately different:
 
-| | claude-session-continuity-mcp | Typical cloud/AI-memory MCP |
+| | passbaton | Typical cloud/AI-memory MCP |
 |---|---|---|
 | **Setup** | `npm i -g` → hooks auto-install | Manual server + API key |
 | **Trigger** | 5 automatic hooks (no commands) | You call a `remember` tool |
@@ -87,7 +86,7 @@ If you want zero-config, offline, no-cost memory that just *happens* while you w
 
 There's also a great class of **local search** tools (e.g. [ctx](https://github.com/ctxrs/ctx)) that index your agent history so you can *query* it (`search "failed migration"`). That's complementary, not the same job:
 
-| | claude-session-continuity-mcp | Local-search tools (ctx, etc.) |
+| | passbaton | Local-search tools (ctx, etc.) |
 |---|---|---|
 | **How you use it** | **Automatic** — context appears on session start, no command | You (or the agent) run a search query |
 | **Compaction** | **PreCompact hook re-injects a handover** → 0 context re-explained after a compact | Not its job (it's a search index) |
@@ -136,6 +135,23 @@ not this tool. Session continuity still works via the saved history.
 
 ---
 
+## Migrating from v1
+
+If you installed this as `claude-session-continuity-mcp` (v1.x), **nothing breaks** — the v1 `claude-hook-*` commands still ship as aliases in v2.
+
+To move to the new name:
+
+```bash
+npm install -g passbaton          # installs the new package
+npm uninstall -g claude-session-continuity-mcp   # optional: drop the old one
+```
+
+The installer rewrites your hook entries to `passbaton-hook-*` and removes the old `claude-hook-*` lines — it matches on both names, so you won't end up with duplicates. Your existing `sessions.db` is untouched: **all past sessions, memories, and solutions carry over.**
+
+Nothing else changes — same hooks, same database, same behavior.
+
+---
+
 ## Quick Start
 
 > **Requires Node.js 22+.** The native `better-sqlite3` dependency only ships
@@ -147,7 +163,7 @@ not this tool. Session continuity still works via the saved history.
 ### Recommended: Global Installation
 
 ```bash
-npm install -g claude-session-continuity-mcp
+npm install -g passbaton
 ```
 
 **That's it!** The postinstall script automatically:
@@ -165,7 +181,7 @@ Global installation is strongly recommended because:
 | **Hooks are user-scoped** | `~/.claude/settings.json` lives in your home directory, not per-project |
 | **Cross-project context** | Sessions from `app-a` and `app-b` share the same DB and search index |
 | **One update = everything refreshed** | `npm install -g <latest>` updates all projects at once; no per-project reinstall |
-| **`npm exec` resolves global first** | Hooks call `npm exec -- claude-hook-*` which finds the global package reliably regardless of cwd |
+| **`npm exec` resolves global first** | Hooks call `npm exec -- passbaton-hook-*` which finds the global package reliably regardless of cwd |
 
 **Important**: Even with global install, you can still **disable the hook for specific projects** (see below).
 Global ≠ forced on every project.
@@ -200,7 +216,7 @@ Empty arrays override the global setting → that project's sessions are no long
 ### Updating to a New Version
 
 ```bash
-npm install -g claude-session-continuity-mcp@latest
+npm install -g passbaton@latest
 ```
 
 That's the only step — all projects pick up the new binary on next Claude Code restart.
@@ -210,7 +226,7 @@ No need to reinstall in each project.
 
 If you really want per-project install (e.g., locked version for one project):
 ```bash
-cd <project> && npm install claude-session-continuity-mcp
+cd <project> && npm install passbaton
 ```
 Drawback: you must install separately in every project, and `npm exec` may not find the local copy reliably from hook context (cwd-dependent). Stick with `-g` unless you have a specific reason.
 
@@ -222,7 +238,7 @@ Drawback: you must install separately in every project, and `npm exec` may not f
   "mcpServers": {
     "project-manager": {
       "command": "npx",
-      "args": ["claude-session-continuity-mcp"]
+      "args": ["passbaton"]
     }
   }
 }
@@ -232,11 +248,11 @@ Drawback: you must install separately in every project, and `npm exec` may not f
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-start" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-user-prompt" }] }],
-    "PostToolUse": [{ "matcher": "Edit", "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-post-tool" }] }, { "matcher": "Write", "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-post-tool" }] }],
-    "PreCompact": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-pre-compact" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "npm exec -- claude-hook-session-end" }] }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "npm exec -- passbaton-hook-session-start" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npm exec -- passbaton-hook-user-prompt" }] }],
+    "PostToolUse": [{ "matcher": "Edit", "hooks": [{ "type": "command", "command": "npm exec -- passbaton-hook-post-tool" }] }, { "matcher": "Write", "hooks": [{ "type": "command", "command": "npm exec -- passbaton-hook-post-tool" }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "npm exec -- passbaton-hook-pre-compact" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "npm exec -- passbaton-hook-session-end" }] }]
   }
 }
 ```
@@ -247,23 +263,23 @@ Drawback: you must install separately in every project, and `npm exec` may not f
 
 | Hook | Command | Function |
 |------|---------|----------|
-| `SessionStart` | `claude-hook-session-start` | Auto-loads project context on session start |
-| `UserPromptSubmit` | `claude-hook-user-prompt` | Auto-injects relevant memories + past reference search |
-| `PostToolUse` | `claude-hook-post-tool` | Tracks active files (Edit, Write) + auto-injects error solutions (Bash) |
-| `PreCompact` | `claude-hook-pre-compact` | Structured handover context before compression |
-| `Stop` | `claude-hook-session-end` | Extracts commits, decisions, error-fix pairs from transcript |
+| `SessionStart` | `passbaton-hook-session-start` | Auto-loads project context on session start |
+| `UserPromptSubmit` | `passbaton-hook-user-prompt` | Auto-injects relevant memories + past reference search |
+| `PostToolUse` | `passbaton-hook-post-tool` | Tracks active files (Edit, Write) + auto-injects error solutions (Bash) |
+| `PreCompact` | `passbaton-hook-pre-compact` | Structured handover context before compression |
+| `Stop` | `passbaton-hook-session-end` | Extracts commits, decisions, error-fix pairs from transcript |
 
 ### Manual Hook Management
 
 ```bash
 # Check hook status
-npx claude-session-hooks status
+npx passbaton-hooks status
 
 # Reinstall hooks
-npx claude-session-hooks install
+npx passbaton-hooks install
 
 # Remove hooks
-npx claude-session-hooks uninstall
+npx passbaton-hooks uninstall
 ```
 
 ### 3. Restart Claude Code
@@ -301,27 +317,27 @@ After installation, restart Claude Code to activate the hooks.
 
 ### How It Works
 
-**SessionStart Hook** (`npx claude-hook-session-start`):
+**SessionStart Hook** (`npx passbaton-hook-session-start`):
 - Auto-detects project: monorepo (`apps/project-name/`) or single project (`package.json` root folder name)
 - Loads context from `.claude/sessions.db`
 - Injects: Current state, **3 recent sessions** with commits/decisions, directives, pending tasks, filtered key memories
 - Auto-cleans stale noise memories (3d+ auto-tracked, 14d+ auto-compact)
 
-**UserPromptSubmit Hook** (`npx claude-hook-user-prompt`):
+**UserPromptSubmit Hook** (`npx passbaton-hook-user-prompt`):
 - Runs on every prompt submission
 - **(v1.11.0)** No longer calls loadContext() — saves 24-60K tokens/session
 - Injects relevant context (filtered: decisions, learnings, errors only)
 
-**PostToolUse Hook** (`npx claude-hook-post-tool`):
+**PostToolUse Hook** (`npx passbaton-hook-post-tool`):
 - Tracks hot file paths and updates `active_context.recent_files`
 - **(v1.12.0)** Auto-detects Bash errors → searches solutions DB → injects past solutions into context
 - **No longer creates observation memories** (v1.10.0 — eliminates `[File Change]` noise)
 
-**PreCompact Hook** (`npx claude-hook-pre-compact`):
+**PreCompact Hook** (`npx passbaton-hook-pre-compact`):
 - Builds structured handover context: work summary, active file, pending action, key facts, recent errors
 - **No longer stores auto-compact memories** (v1.10.0)
 
-**Stop Hook** (`npx claude-hook-session-end`):
+**Stop Hook** (`npx passbaton-hook-session-end`):
 - Extracts commit messages from JSONL transcript (`git commit -m` patterns)
 - Extracts error-fix pairs (error → resolution within 3 messages)
 - **(v1.12.0)** Auto-records error→fix pairs to solutions table for future reuse
@@ -360,13 +376,13 @@ After installation, restart Claude Code to activate the hooks.
 
 ```bash
 # Check status
-npx claude-session-hooks status
+npx passbaton-hooks status
 
 # Reinstall
-npx claude-session-hooks install
+npx passbaton-hooks install
 
 # Remove
-npx claude-session-hooks uninstall
+npx passbaton-hooks uninstall
 
 # Temporarily disable
 export MCP_HOOKS_DISABLED=true
@@ -416,12 +432,12 @@ Previous versions used absolute paths or `npx`:
 "command": "node \"/path/to/project-a/node_modules/.../session-start.js\""
 
 // v1.4.0-1.4.2 - npx (required global install or hit npm registry)
-"command": "npx claude-hook-session-start"
+"command": "npx passbaton-hook-session-start"
 ```
 
 Now we use `npm exec --`:
 ```json
-"command": "npm exec -- claude-hook-session-start"
+"command": "npm exec -- passbaton-hook-session-start"
 ```
 
 **`npm exec --` finds local `node_modules/.bin` first**, then falls back to global. Works with both local and global installation without hitting npm registry.
@@ -623,8 +639,8 @@ SQLite database at `~/.claude/sessions.db`:
 
 ```bash
 # Clone
-git clone https://github.com/leesgit/claude-session-continuity-mcp.git
-cd claude-session-continuity-mcp
+git clone https://github.com/leesgit/passbaton.git
+cd passbaton
 
 # Install
 npm install
