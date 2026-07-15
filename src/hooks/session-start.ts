@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
 import { logHookError, emitContext, isCodexHost, isGeminiHost } from '../utils/logger.js';
+import { isEnabled } from '../utils/config.js';
 
 interface SessionInput {
   cwd?: string;
@@ -84,6 +85,9 @@ function estimateTokens(text: string): number {
 
 function loadContext(dbPath: string, project: string): string | null {
   if (!fs.existsSync(dbPath)) return null;
+
+  // dbPath is "<workspaceRoot>/.claude/sessions.db" → strip two levels for feature-flag lookups.
+  const workspaceRoot = path.dirname(path.dirname(dbPath));
 
   try {
     const db = new Database(dbPath);
@@ -243,6 +247,49 @@ function loadContext(dbPath: string, project: string): string | null {
         }
       }
     } catch { /* ignore */ }
+
+    // [Priority 5.5] Verification ledger — warn if a recent session ended with a red build
+    // or left issues open. Continuity of BUILD STATE, not just memory. (verificationLedger)
+    try {
+      if (isEnabled('verificationLedger', workspaceRoot) && tokenBudget > 15) {
+        const recent = db.prepare(
+          `SELECT verification_result, issues, datetime(timestamp,'localtime') AS ts
+           FROM sessions WHERE project = ?
+           ORDER BY timestamp DESC LIMIT 3`
+        ).all(project) as Array<{ verification_result: string | null; issues: string | null; ts: string }>;
+        const redRe = /fail|error|❌|red|broken/i;
+        const bad = recent.find(r =>
+          (r.verification_result && redRe.test(r.verification_result)) ||
+          (r.issues && r.issues.trim() !== '' && r.issues.trim() !== '[]')
+        );
+        if (bad) {
+          const why = bad.verification_result && redRe.test(bad.verification_result)
+            ? 'the build was failing'
+            : 'issues were left open';
+          const warn = `\n⚠️ **Heads up**: a recent session (${bad.ts}) ended with ${why}. Check before building on top.`;
+          lines.push(warn);
+          tokenBudget -= estimateTokens(warn);
+        }
+      }
+    } catch { /* sessions table shape may vary */ }
+
+    // [Priority 5.6] Hot-path pre-warm — surface the files you most often touch in THIS
+    // project, ranked by real access_count. hot_paths is written on every tool use but was
+    // never read back until now. (hotPathPrewarm)
+    try {
+      if (isEnabled('hotPathPrewarm', workspaceRoot) && tokenBudget > 20) {
+        const hot = db.prepare(
+          `SELECT file_path, access_count FROM hot_paths
+           WHERE project = ? ORDER BY access_count DESC LIMIT 5`
+        ).all(project) as Array<{ file_path: string; access_count: number }>;
+        if (hot.length > 0) {
+          const files = hot.map(h => `${h.file_path.split('/').pop()} (${h.access_count}×)`).join(', ');
+          const hotLine = `\n**Hot files** (you edit these most here): ${files}`;
+          lines.push(hotLine);
+          tokenBudget -= estimateTokens(hotLine);
+        }
+      }
+    } catch { /* hot_paths table may not exist */ }
 
     // [Priority 6] 솔루션 통계 (1줄, 저비용)
     try {

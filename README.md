@@ -313,6 +313,49 @@ After installation, restart Claude Code to activate the hooks.
 
 ---
 
+## Feature toggles — everything is opt-in
+
+**(v2.1.0)** Every feature can be turned on/off individually. Config lives in a plain,
+hand-editable JSON file (`~/.claude/passbaton.config.json`) — separate from your data,
+so it survives a db reset. No file = today's defaults (nothing changes for existing users).
+
+```bash
+passbaton config                          # print a grouped table of every feature + on/off
+passbaton config set patternMining on     # flip one feature
+passbaton config preset minimal           # minimal | default | everything
+passbaton config reset                     # back to defaults
+```
+
+**On-by-default rule:** a feature ships **on** only if it's *silent, safe, and universally
+useful*. Anything that speaks unprompted, guesses, or writes speculative rows ships **off**.
+
+### Core (on by default)
+
+| Feature | Key | What it does |
+|---|---|---|
+| Session start injection | `sessionStart` | Restore prior context on start |
+| **Compaction handover+** | `compactionHandover` | Before a compaction, carry over your working state **plus hot files and last build status** — the one gap platform auto-memory structurally can't cover |
+| **Hot-path pre-warm** | `hotPathPrewarm` | On start, surface the files you edit most in this project, ranked by real access count |
+| **Verification ledger** | `verificationLedger` | Warn on start if a recent session left the build red or issues open |
+| Cross-agent share | `crossAgentSync` | One local db shared across Claude Code / Codex / Gemini |
+| Session persist | `sessionEnd` | Save session state on exit |
+| Auto memory surfacing | `autoInject` | Auto-surface relevant past memories on start |
+
+### Experimental (off by default — opt in)
+
+| Feature | Key | Status |
+|---|---|---|
+| Trigger matching | `triggerMatching` | Keyword → auto-inject solutions (can false-positive) |
+| Status line | `statusLineInject` | Append a passbaton status line to output |
+| **Pattern mining** | `patternMining` | 🚧 Roadmap — mine recurring cross-session patterns (needs data accumulation) |
+| **Cross-agent handoff** | `crossAgentHandoff` | 🚧 Roadmap — start a task in one agent, resume it in another with full state |
+| **Agent strength router** | `agentRouter` | 🚧 Roadmap — learn which agent is faster/greener at which task on *your* repo |
+
+> 🚧 = designed, not yet shipped. Tracked so you can see where this is going. The on-by-default
+> features above are live now.
+
+---
+
 ## Claude Hooks - Auto Context System
 
 ### How It Works

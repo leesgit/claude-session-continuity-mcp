@@ -2509,12 +2509,17 @@ async function main() {
 const CLI_COMMANDS = new Set(['install', 'uninstall', 'remove', 'status']);
 const cliArg = process.argv[2];
 
-if (cliArg && (CLI_COMMANDS.has(cliArg) || cliArg === 'help' || cliArg === '--help' || cliArg === '-h')) {
+if (cliArg === 'config') {
+  // Feature-flag CLI: `passbaton config [set|preset|reset|path]`
+  const { runConfigCli } = await import('./cli-config.js');
+  process.exit(runConfigCli(process.argv.slice(3)));
+} else if (cliArg && (CLI_COMMANDS.has(cliArg) || cliArg === 'help' || cliArg === '--help' || cliArg === '-h')) {
   if (cliArg === 'help' || cliArg === '--help' || cliArg === '-h') {
-    console.log('Usage: npx passbaton [install|uninstall|status]');
+    console.log('Usage: npx passbaton [install|uninstall|status|config]');
     console.log('  install    Register lifecycle hooks for Claude Code / Codex CLI / Gemini CLI');
     console.log('  uninstall  Remove the hooks');
     console.log('  status     Show installed hooks');
+    console.log('  config     View / toggle feature flags (on/off)');
     console.log('  (no arg)   Start the MCP server (stdio) — used by the hook runtime');
     process.exit(0);
   }

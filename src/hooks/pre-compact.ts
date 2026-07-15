@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
+import { isEnabled } from '../utils/config.js';
 
 interface CompactInput {
   cwd?: string;
@@ -333,6 +334,34 @@ async function main() {
         recoveryLines.push('**Recent errors**:');
         handover.recentErrors.forEach(e => recoveryLines.push(`- ${e}`));
       }
+    }
+
+    // Compaction handover+ : the post-compaction agent loses the in-session thread, so
+    // carry over the two things it most needs and can't reconstruct — which files were hot
+    // this session, and whether the build was green. auto-memory does NOT cover this gap.
+    // dbPath is "<workspaceRoot>/.claude/sessions.db" → strip two levels.
+    const workspaceRoot = path.dirname(path.dirname(dbPath));
+    if (isEnabled('compactionHandover', workspaceRoot)) {
+      try {
+        const hot = db.prepare(
+          `SELECT file_path, access_count FROM hot_paths
+           WHERE project = ? ORDER BY access_count DESC LIMIT 5`
+        ).all(project) as Array<{ file_path: string; access_count: number }>;
+        if (hot.length > 0) {
+          recoveryLines.push(`**Hot files**: ${hot.map(h => h.file_path.split('/').pop()).join(', ')}`);
+        }
+      } catch { /* hot_paths may not exist */ }
+
+      try {
+        const last = db.prepare(
+          `SELECT verification_result FROM sessions WHERE project = ?
+           ORDER BY timestamp DESC LIMIT 1`
+        ).get(project) as { verification_result: string | null } | undefined;
+        if (last?.verification_result) {
+          const red = /fail|error|❌|red|broken/i.test(last.verification_result);
+          recoveryLines.push(`**Build state (last session)**: ${red ? '🔴 was failing — verify before continuing' : '🟢 green'}`);
+        }
+      } catch { /* sessions shape may vary */ }
     }
 
     db.close();
