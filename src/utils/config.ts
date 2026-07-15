@@ -56,7 +56,7 @@ const PRESETS: Record<string, (k: string) => boolean> = {
   everything: () => true,
 };
 
-interface Cache { mtimeMs: number; flags: Record<string, boolean> }
+interface Cache { path: string; mtimeMs: number; flags: Record<string, boolean> }
 let cache: Cache | null = null;
 
 /** Resolve the active config file: project `.claude/` if present, else home `~/.claude/`. */
@@ -84,7 +84,10 @@ export function isEnabled(feature: string, workspaceRoot: string): boolean {
   let mtimeMs = 0;
   try { mtimeMs = fs.statSync(p).mtimeMs; } catch { /* no file → defaults */ }
 
-  if (!cache || cache.mtimeMs !== mtimeMs) {
+  // Cache is keyed on BOTH path and mtime: a long-lived caller (e.g. MCP server loop)
+  // may query different workspace roots, and two config files can share an mtimeMs.
+  // Keying on mtime alone would return the first file's flags for the second path.
+  if (!cache || cache.path !== p || cache.mtimeMs !== mtimeMs) {
     const flags = { ...DEFAULTS };
     if (mtimeMs) {
       try {
@@ -100,7 +103,7 @@ export function isEnabled(feature: string, workspaceRoot: string): boolean {
         }
       } catch { /* malformed → keep defaults, never throw in a hook */ }
     }
-    cache = { mtimeMs, flags };
+    cache = { path: p, mtimeMs, flags };
   }
   return cache.flags[feature] ?? DEFAULTS[feature] ?? false;
 }
