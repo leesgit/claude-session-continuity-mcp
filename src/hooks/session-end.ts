@@ -968,18 +968,42 @@ async function main() {
           if (sol.includes('Co-Authored-By:')) continue;
           if (errSig.length < 5) continue;
 
-          // P3 (2026-07-08): error_signature 품질 게이트 — 대화 잡음 거부.
-          // errorRe가 '문제/충돌' 같은 일상어를 에러로 오분류해 내레이션 파편이
-          // 시그니처로 저장됐음(실측 28% 노이즈).
-          // 다국어(영어+한국어) 지원:
-          //   - 라틴 문자([A-Za-z])가 있으면 영어 에러(TypeError, Build failed,
-          //     ECONNREFUSED, undefined …)로 간주해 전부 통과.
-          //   - 라틴이 없는 순수 한국어는 구체적 에러 표현이 있을 때만 통과.
-          //   - 둘 다 없는 순수 파편(문제/충돌 단독)만 거부.
-          const hasErrorSignal =
-            /[A-Za-z]/.test(errSig) ||
-            /(실패|오류|누락|초과|깨짐|깨진|중단|크래시|안 ?됨|불가|타임아웃|한도)/.test(errSig);
-          if (!hasErrorSignal) continue;
+          // P0 (2026-07-18, audit-7): error_signature 품질 게이트 재설계.
+          // 이전 게이트('라틴문자 1자라도 있으면 통과')는 82% 노이즈 직통로였음
+          // (실측 last-50 진짜에러 ~10/50). 라틴 통과가 tool/hook 자기출력·스킬목록·
+          // 대화파편을 전부 흘려보냄. 3단계로 교체:
+          //   (1) 자기출력/메타 블랙리스트 거부 (X 실측 노이즈 실제 패턴)
+          //   (2) 문장중간 잘린 파편 거부 (한글 서술 조사로 시작/끝나는 것)
+          //   (3) 진짜 에러 구조신호 요구 (영어 에러클래스/스택/코드/경로 OR 한국어 에러표현)
+          // 회귀 방지: 한국어 진짜에러 통과율 유지가 목표(임베딩 필터 false-neg 전례).
+
+          // (1) 자기출력/메타 노이즈 블랙리스트 — passbaton hook 출력, 툴 스키마,
+          //     스킬 목록, 에이전트 설명이 시그니처로 새던 실측 패턴.
+          const NOISE_BLACKLIST = /(Solutions auto-recorded|Errors?\s*:\s*\d|is_error|auto-recorded|스킬|어시스턴트|logic errors|potential root cause|FEASIBLE|BLOCKED|CONFIRMED|verdict|findings|The problem|README)/i;
+          if (NOISE_BLACKLIST.test(errSig)) continue;
+
+          // (2) 스킬/커맨드 목록 파편 (`/fix - ...`, `/algo`, `/work` 등) 거부.
+          if (/^\/?[a-z][a-z-]{1,20}\s*[-–]\s/i.test(errSig)) continue;
+
+          // (3) 잘린 대화 파편: 한글 종결/연결 조사로 끝나거나 닫는 괄호로 시작.
+          if (/(습니다|했습니다|봅니다|됩니다|합니다|았다|었다|한다|이다|진행|경우|때문|이니까|으니|주세요|보입니다|입니다)[.)\s]*$/.test(errSig)) continue;
+          if (/^[)\]}]/.test(errSig.trim())) continue;
+
+          // (3b) 내레이션 문장 거부: 한글 서술 어미/조사가 문장 중간에 다수 출현하면
+          //      에러 시그니처(짧은 명사구/코드)가 아니라 대화 서술문. errorRe가
+          //      "에러 상태 + 재시도...", "실패 시 사용자는..." 같은 내 설명을
+          //      '에러'/'실패' 단어만 보고 잡아낸 것 → 실측 노이즈 대다수가 이 유형.
+          const koreanNarrationMarkers = (errSig.match(/(습니다|봅니다|합니다|됩니다|입니다|해요|어요|아요|는데|니까|면서|하면|해서|처럼|같은|이제|먼저|그다음|여기)/g) || []).length;
+          if (koreanNarrationMarkers >= 2) continue;
+
+          // (4) 진짜 에러 구조신호 요구.
+          //   - 영어: 에러클래스/빌드실패/스택프레임/에러코드/경로:줄
+          //   - 한국어: 구체적 에러 표현 (단, 내레이션은 위에서 이미 걸러짐)
+          const hasStructuredError =
+            /(TypeError|ReferenceError|SyntaxError|RangeError|Error:|Exception|Traceback|ENOENT|ECONN|EADDR|EEXIST|MODULE_NOT_FOUND|undefined|null|NaN|failed|Failed|cannot|Cannot|at \w+ \(|:\d+:\d+|\.\w{1,4}:\d+)/.test(errSig);
+          const hasKoreanError =
+            /(실패|오류|에러|누락|초과|깨짐|깨진|중단|크래시|안 ?됨|불가|타임아웃|한도|충돌|먹통|리셋|무한|폭주|ANR|누수|롤백)/.test(errSig);
+          if (!hasStructuredError && !hasKoreanError) continue;
 
           // 1차 dedup: 동일 error_signature
           const existingByError = db.prepare(
