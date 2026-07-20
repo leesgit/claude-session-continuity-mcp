@@ -60,12 +60,16 @@ function printTable(workspaceRoot: string): void {
     console.log(label);
     for (const k of keys) {
       const on = flags[k];
-      const dot = on ? '●' : '○'; // ● / ○
-      const state = on ? 'on ' : 'off';
+      const wired = FEATURE_DEFS[k].configurable !== false;
+      // Unwired flags aren't user-toggleable — show a neutral marker + fixed state
+      // instead of ●/○ so `config set` on them doesn't look effective.
+      const dot = !wired ? '·' : on ? '●' : '○';
+      const state = !wired ? '—  ' : on ? 'on ' : 'off';
       console.log(`  ${dot} ${k.padEnd(20)} ${state}  ${FEATURE_DEFS[k].desc}`);
     }
     console.log('');
   }
+  console.log('  ●=on ○=off ·=always on (not a config toggle)');
   console.log('  passbaton config set <feature> on|off   ·   passbaton config preset <minimal|default|everything>');
 }
 
@@ -106,6 +110,10 @@ export function runConfigCli(args: string[]): number {
     const val = args[2];
     if (!feature || !FEATURE_DEFS[feature]) {
       console.error(`Unknown feature "${feature ?? ''}". Run "passbaton config" to see valid names.`);
+      return 1;
+    }
+    if (FEATURE_DEFS[feature].configurable === false) {
+      console.error(`"${feature}" is always on and not a config toggle (no hook reads it). ${FEATURE_DEFS[feature].desc}`);
       return 1;
     }
     if (val !== 'on' && val !== 'off') {

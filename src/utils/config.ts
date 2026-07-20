@@ -20,6 +20,13 @@ export interface FeatureDef {
   enabled: boolean;
   desc: string;
   group: 'core' | 'cross-agent' | 'experimental';
+  /**
+   * Whether a hook actually reads this flag via isEnabled(). Only wired flags
+   * are user-toggleable; unwired ones (hook existence is controlled by
+   * settings.json, not config) render as "always on" and reject `config set`.
+   * Omitted = true. Audited 2026-07-20 (audit-7): 5 wired, 10 unwired.
+   */
+  configurable?: boolean;
 }
 
 /**
@@ -30,23 +37,27 @@ export interface FeatureDef {
  */
 export const FEATURE_DEFS: Record<string, FeatureDef> = {
   // ── core: quiet, safe, universally-good → ON ──
-  sessionStart:       { enabled: true,  desc: 'Inject prior session context on start', group: 'core' },
+  // NOTE: hook existence (sessionStart/sessionEnd) is controlled by settings.json,
+  // not by config — these read no flag, so they are configurable:false ("always on").
+  sessionStart:       { enabled: true,  desc: 'Inject prior session context on start (always on — remove the hook in settings.json to disable)', group: 'core', configurable: false },
   compactionHandover: { enabled: true,  desc: 'Preserve context across a pre-compact (headline feature)', group: 'core' },
-  sessionEnd:         { enabled: true,  desc: 'Persist session state on stop', group: 'core' },
-  autoInject:         { enabled: true,  desc: 'Auto-surface relevant past memories at session start', group: 'core' },
-  taskTracking:       { enabled: true,  desc: 'Read/write the task list via MCP + hooks', group: 'core' },
+  sessionEnd:         { enabled: true,  desc: 'Persist session state on stop (always on — remove the hook in settings.json to disable)', group: 'core', configurable: false },
+  autoInject:         { enabled: true,  desc: 'Auto-surface relevant past memories at session start', group: 'core', configurable: false },
+  taskTracking:       { enabled: true,  desc: 'Read/write the task list via MCP + hooks', group: 'core', configurable: false },
   hotPathPrewarm:     { enabled: true,  desc: 'Surface the files you most often edit in this project', group: 'core' },
   verificationLedger: { enabled: true,  desc: 'Warn on start if a recent session left the build red', group: 'core' },
   // ── cross-agent: works, but only matters to multi-CLI users ──
-  crossAgentSync:     { enabled: true,  desc: 'Share one local db across Claude Code / Codex / Gemini', group: 'cross-agent' },
-  postToolCapture:    { enabled: true,  desc: 'Observe tool use to build hot-paths (low-noise)', group: 'cross-agent' },
+  crossAgentSync:     { enabled: true,  desc: 'Share one local db across Claude Code / Codex / Gemini (inherent — not a toggle)', group: 'cross-agent', configurable: false },
+  postToolCapture:    { enabled: true,  desc: 'Observe tool use to build hot-paths (low-noise)', group: 'cross-agent', configurable: false },
   solutionCapture:    { enabled: true,  desc: 'Auto-record error→fix pairs to a solution archive (set off to skip)', group: 'cross-agent' },
   // ── experimental / polarizing → OFF ──
-  triggerMatching:    { enabled: false, desc: 'Match prompt keywords to auto-inject solutions (can false-positive)', group: 'experimental' },
+  // triggerMatching/patternMining/memoryAutoStore/statusLineInject read no flag yet
+  // (designed-not-shipped) → configurable:false until a hook actually consumes them.
+  triggerMatching:    { enabled: false, desc: 'Match prompt keywords to auto-inject solutions (not yet wired)', group: 'experimental', configurable: false },
   strictSolutionGate: { enabled: false, desc: 'Stricter error→fix capture filter — fewer noise entries, may drop some real ones', group: 'experimental' },
-  patternMining:      { enabled: false, desc: 'Mine work patterns and suggest workflows (opinionated)', group: 'experimental' },
-  memoryAutoStore:    { enabled: false, desc: 'Auto-write observation memories from prompts (noisy)', group: 'experimental' },
-  statusLineInject:   { enabled: false, desc: 'Append a passbaton status line to session-start output', group: 'experimental' },
+  patternMining:      { enabled: false, desc: 'Mine work patterns and suggest workflows (not yet wired)', group: 'experimental', configurable: false },
+  memoryAutoStore:    { enabled: false, desc: 'Auto-write observation memories from prompts (not yet wired)', group: 'experimental', configurable: false },
+  statusLineInject:   { enabled: false, desc: 'Append a passbaton status line to session-start output (not yet wired)', group: 'experimental', configurable: false },
 };
 
 const DEFAULTS: Record<string, boolean> =
