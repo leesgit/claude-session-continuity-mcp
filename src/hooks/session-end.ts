@@ -717,7 +717,14 @@ async function main() {
     const debugLogPath = path.join(path.dirname(dbPath), 'session-end-debug.log');
     const inputKeys = Object.keys(input);
     const lastMsgLen = input.last_assistant_message?.length || 0;
-    const debugLine = `[${new Date().toISOString()}] project=${project} sid=${input.session_id?.slice(0,8) || 'none'} keys=[${inputKeys.join(',')}] transcript_path=${input.transcript_path || 'none'} last_msg_len=${lastMsgLen}\n`;
+    // P2 (audit-7 2026-07-20): log the resolved workspace root + whether it fell
+    // back to cwd. A wrong root reads the wrong config/db, so a user's `config set`
+    // can silently no-op. This makes that observable instead of fail-silent.
+    const wsRoot = detectWorkspaceRoot(cwd);
+    const wsFallback = wsRoot === cwd
+      && !fs.existsSync(path.join(cwd, 'apps'))
+      && !fs.existsSync(path.join(cwd, '.claude', 'sessions.db'));
+    const debugLine = `[${new Date().toISOString()}] project=${project} sid=${input.session_id?.slice(0,8) || 'none'} keys=[${inputKeys.join(',')}] transcript_path=${input.transcript_path || 'none'} last_msg_len=${lastMsgLen} ws_root=${wsRoot}${wsFallback ? ' (fallback=cwd, config/db may be off-target)' : ''}\n`;
     fs.appendFileSync(debugLogPath, debugLine);
 
     if (!fs.existsSync(dbPath)) {
@@ -957,7 +964,7 @@ async function main() {
     // 에러→솔루션 자동 기록 (solutions 테이블)
     // P1-4 (2026-05-22): 품질 필터 + 동일 solution 텍스트 dedup 추가
     let solutionsRecorded = 0;
-    const wsRoot = detectWorkspaceRoot(cwd);
+    // wsRoot는 위(디버그 로그)에서 이미 detectWorkspaceRoot(cwd)로 계산됨 — 재사용.
     // solutionCapture 토글 (기본 on = 하위호환, v1부터 있던 기능).
     // off면 error→fix 자동기록 자체를 건너뜀 (세션저장은 유지).
     const solutionCaptureOn = isEnabled('solutionCapture', wsRoot);
