@@ -957,10 +957,14 @@ async function main() {
     // 에러→솔루션 자동 기록 (solutions 테이블)
     // P1-4 (2026-05-22): 품질 필터 + 동일 solution 텍스트 dedup 추가
     let solutionsRecorded = 0;
+    const wsRoot = detectWorkspaceRoot(cwd);
+    // solutionCapture 토글 (기본 on = 하위호환, v1부터 있던 기능).
+    // off면 error→fix 자동기록 자체를 건너뜀 (세션저장은 유지).
+    const solutionCaptureOn = isEnabled('solutionCapture', wsRoot);
     // strictSolutionGate 토글 (기본 off = 하위호환, 기존 라틴문자 게이트 유지).
     // on일 때만 audit-7 P0 엄격 게이트(노이즈 80%→~50%, 단 일부 진짜에러 false-neg 가능).
-    const strictGate = isEnabled('strictSolutionGate', detectWorkspaceRoot(cwd));
-    if (transcript.errorFixPairs.length > 0) {
+    const strictGate = isEnabled('strictSolutionGate', wsRoot);
+    if (solutionCaptureOn && transcript.errorFixPairs.length > 0) {
       try {
         for (const pair of transcript.errorFixPairs) {
           const errSig = pair.error?.trim() || '';

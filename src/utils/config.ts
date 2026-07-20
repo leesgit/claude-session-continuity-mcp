@@ -40,6 +40,7 @@ export const FEATURE_DEFS: Record<string, FeatureDef> = {
   // ── cross-agent: works, but only matters to multi-CLI users ──
   crossAgentSync:     { enabled: true,  desc: 'Share one local db across Claude Code / Codex / Gemini', group: 'cross-agent' },
   postToolCapture:    { enabled: true,  desc: 'Observe tool use to build hot-paths (low-noise)', group: 'cross-agent' },
+  solutionCapture:    { enabled: true,  desc: 'Auto-record error→fix pairs to a solution archive (set off to skip)', group: 'cross-agent' },
   // ── experimental / polarizing → OFF ──
   triggerMatching:    { enabled: false, desc: 'Match prompt keywords to auto-inject solutions (can false-positive)', group: 'experimental' },
   strictSolutionGate: { enabled: false, desc: 'Stricter error→fix capture filter — fewer noise entries, may drop some real ones', group: 'experimental' },
