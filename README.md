@@ -315,51 +315,66 @@ After installation, restart Claude Code to activate the hooks.
 
 ## Feature toggles — everything is opt-in
 
-**(v2.1.0)** Every feature can be turned on/off individually. Config lives in a plain,
+**(v2.1.0+)** Five behaviours are individually toggleable; the rest are shown for
+transparency but are **always on** (a hook's mere existence is controlled by your
+`settings.json`, not by config) or **not yet wired**. Config lives in a plain,
 hand-editable JSON file (`~/.claude/passbaton.config.json`) — separate from your data,
 so it survives a db reset. No file = today's defaults (nothing changes for existing users).
 
 ```bash
-passbaton config                          # print a grouped table of every feature + on/off
-passbaton config set patternMining on     # flip one feature
-passbaton config preset minimal           # minimal | default | everything
-passbaton config reset                     # back to defaults
-passbaton config path                      # print the active config file path
+passbaton config                            # grouped table; ●/○ = toggleable, · = always on
+passbaton config set solutionCapture off    # flip a toggleable feature
+passbaton config set strictSolutionGate on  # opt into the strict error→fix filter
+passbaton config preset minimal             # minimal | default | everything
+passbaton config reset                       # back to defaults
+passbaton config path                        # print the active config file path
 ```
 
-Each feature also has an env override for one-off/CI use: `PASSBATON_<FEATURE>=0` (e.g.
-`PASSBATON_TRIGGERMATCHING=0`) wins over the config file.
+Trying to `set` an always-on / not-yet-wired feature is rejected with a clear message.
+Each toggleable feature also has an env override for one-off/CI use:
+`PASSBATON_<FEATURE>=0` (e.g. `PASSBATON_SOLUTIONCAPTURE=0`) wins over the config file.
 
 **On-by-default rule:** a feature ships **on** only if it's *silent, safe, and universally
 useful*. Anything that speaks unprompted, guesses, or writes speculative rows ships **off**.
 
+Legend: **●/○** = toggleable (on/off) · **·** = always on, not a config toggle · **⋯** = not yet wired.
+
 ### Core (on by default)
 
-| Feature | Key | What it does |
-|---|---|---|
-| Session start injection | `sessionStart` | Restore prior context on start |
-| **Compaction handover+** | `compactionHandover` | Before a compaction, carry over your working state **plus hot files and last build status** — the one gap platform auto-memory structurally can't cover |
-| Session persist | `sessionEnd` | Save session state on exit |
-| Auto memory surfacing | `autoInject` | Auto-surface relevant past memories on start |
-| Task tracking | `taskTracking` | Read/write the task list via MCP + hooks |
-| **Hot-path pre-warm** | `hotPathPrewarm` | On start, surface the files you edit most in this project, ranked by real access count |
-| **Verification ledger** | `verificationLedger` | Warn on start if a recent session left the build red or issues open |
+| Feature | Key | Toggle | What it does |
+|---|---|---|---|
+| Session start injection | `sessionStart` | · always on | Restore prior context on start |
+| **Compaction handover+** | `compactionHandover` | ● toggleable | Before a compaction, carry over your working state **plus hot files and last build status** — the one gap platform auto-memory structurally can't cover |
+| Session persist | `sessionEnd` | · always on | Save session state on exit |
+| Auto memory surfacing | `autoInject` | · always on | Auto-surface relevant past memories on start |
+| Task tracking | `taskTracking` | · always on | Read/write the task list via MCP + hooks |
+| **Hot-path pre-warm** | `hotPathPrewarm` | ● toggleable | On start, surface the files you edit most in this project, ranked by real access count |
+| **Verification ledger** | `verificationLedger` | ● toggleable | Warn on start if a recent session left the build red or issues open |
+
+> `sessionStart`/`sessionEnd` are "always on" because a hook either runs or it doesn't —
+> that's controlled by the hook registration in `~/.claude/settings.json`, not by config.
+> To disable them, remove the hook there.
 
 ### Cross-agent (on by default)
 
-| Feature | Key | What it does |
-|---|---|---|
-| Cross-agent share | `crossAgentSync` | One local db shared across Claude Code / Codex / Gemini |
-| Tool-use capture | `postToolCapture` | Observe tool use to build hot-paths (low-noise) |
+| Feature | Key | Toggle | What it does |
+|---|---|---|---|
+| Cross-agent share | `crossAgentSync` | · inherent | One local db shared across Claude Code / Codex / Gemini (not a toggle — it's how storage works) |
+| Tool-use capture | `postToolCapture` | · always on | Observe tool use to build hot-paths (low-noise) |
+| **Solution capture** | `solutionCapture` | ● toggleable | Auto-record error→fix pairs to a solution archive. Set **off** to skip it entirely (session save is unaffected) |
 
-### Experimental (off by default — opt in)
+### Experimental (off by default)
 
-| Feature | Key | What it does |
-|---|---|---|
-| Trigger matching | `triggerMatching` | Match prompt keywords to auto-inject solutions (can false-positive) |
-| Pattern mining | `patternMining` | Mine work patterns and suggest workflows (opinionated) |
-| Memory auto-store | `memoryAutoStore` | Auto-write observation memories from prompts (noisy) |
-| Status line | `statusLineInject` | Append a passbaton status line to session-start output |
+| Feature | Key | Toggle | What it does |
+|---|---|---|---|
+| **Strict solution gate** | `strictSolutionGate` | ○ opt-in | Stricter error→fix capture filter — fewer noise entries, but may drop some real ones |
+| Trigger matching | `triggerMatching` | ⋯ not yet wired | (planned) Match prompt keywords to auto-inject solutions |
+| Pattern mining | `patternMining` | ⋯ not yet wired | (planned) Mine work patterns and suggest workflows |
+| Memory auto-store | `memoryAutoStore` | ⋯ not yet wired | (planned) Auto-write observation memories from prompts |
+| Status line | `statusLineInject` | ⋯ not yet wired | (planned) Append a passbaton status line to session-start output |
+
+The only genuinely user-flippable flags today are **`compactionHandover`, `hotPathPrewarm`,
+`verificationLedger`, `solutionCapture`** (on) and **`strictSolutionGate`** (opt-in).
 
 ---
 
