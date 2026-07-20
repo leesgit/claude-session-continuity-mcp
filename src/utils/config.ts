@@ -42,6 +42,7 @@ export const FEATURE_DEFS: Record<string, FeatureDef> = {
   postToolCapture:    { enabled: true,  desc: 'Observe tool use to build hot-paths (low-noise)', group: 'cross-agent' },
   // ── experimental / polarizing → OFF ──
   triggerMatching:    { enabled: false, desc: 'Match prompt keywords to auto-inject solutions (can false-positive)', group: 'experimental' },
+  strictSolutionGate: { enabled: false, desc: 'Stricter error→fix capture filter — fewer noise entries, may drop some real ones', group: 'experimental' },
   patternMining:      { enabled: false, desc: 'Mine work patterns and suggest workflows (opinionated)', group: 'experimental' },
   memoryAutoStore:    { enabled: false, desc: 'Auto-write observation memories from prompts (noisy)', group: 'experimental' },
   statusLineInject:   { enabled: false, desc: 'Append a passbaton status line to session-start output', group: 'experimental' },

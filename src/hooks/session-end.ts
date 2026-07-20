@@ -16,6 +16,7 @@ import * as readline from 'readline';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
 import { logHookError, isCodexHost, isGeminiHost } from '../utils/logger.js';
+import { isEnabled } from '../utils/config.js';
 
 interface SessionEndInput {
   cwd?: string;
@@ -956,6 +957,9 @@ async function main() {
     // 에러→솔루션 자동 기록 (solutions 테이블)
     // P1-4 (2026-05-22): 품질 필터 + 동일 solution 텍스트 dedup 추가
     let solutionsRecorded = 0;
+    // strictSolutionGate 토글 (기본 off = 하위호환, 기존 라틴문자 게이트 유지).
+    // on일 때만 audit-7 P0 엄격 게이트(노이즈 80%→~50%, 단 일부 진짜에러 false-neg 가능).
+    const strictGate = isEnabled('strictSolutionGate', detectWorkspaceRoot(cwd));
     if (transcript.errorFixPairs.length > 0) {
       try {
         for (const pair of transcript.errorFixPairs) {
@@ -968,6 +972,14 @@ async function main() {
           if (sol.includes('Co-Authored-By:')) continue;
           if (errSig.length < 5) continue;
 
+          if (!strictGate) {
+            // ── 기본(off): 기존 라틴문자 게이트 (v2.0.0 하위호환) ──
+            const hasErrorSignal =
+              /[A-Za-z]/.test(errSig) ||
+              /(실패|오류|누락|초과|깨짐|깨진|중단|크래시|안 ?됨|불가|타임아웃|한도)/.test(errSig);
+            if (!hasErrorSignal) continue;
+          } else {
+          // ── strict(on): audit-7 P0 재설계 게이트 ──
           // P0 (2026-07-18, audit-7): error_signature 품질 게이트 재설계.
           // 이전 게이트('라틴문자 1자라도 있으면 통과')는 82% 노이즈 직통로였음
           // (실측 last-50 진짜에러 ~10/50). 라틴 통과가 tool/hook 자기출력·스킬목록·
@@ -1004,6 +1016,7 @@ async function main() {
           const hasKoreanError =
             /(실패|오류|에러|누락|초과|깨짐|깨진|중단|크래시|안 ?됨|불가|타임아웃|한도|충돌|먹통|리셋|무한|폭주|ANR|누수|롤백)/.test(errSig);
           if (!hasStructuredError && !hasKoreanError) continue;
+          } // ── end strict gate ──
 
           // 1차 dedup: 동일 error_signature
           const existingByError = db.prepare(
